@@ -1483,6 +1483,259 @@ cerrado conectando el transmisor con el receptor y comprobando que un
 dato enviado por UART TX pueda ser reconstruido correctamente por
 UART RX.
 
+
+### 7.6 Detección de dato recibido y descarte/recuperación
+
+La lógica de detección de dato recibido y descarte/recuperación se
+encarga de determinar qué debe ocurrir una vez que el receptor UART
+finaliza una operación de recepción.
+
+El bloque utiliza las señales `rx_done` y `rx_valid` generadas durante
+el proceso de recepción. A partir de estas señales se determina si el
+dato recibido puede almacenarse en el registro RX o si debe descartarse.
+
+Esta separación evita que una recepción finalizada pero inválida
+modifique el contenido disponible para el procesador.
+
+#### Objetivo
+
+El objetivo del módulo es generar una señal de carga para el registro RX
+únicamente cuando se haya completado una recepción válida.
+
+Cuando la recepción finaliza correctamente, se genera `rx_load`, que
+permite almacenar `rx_data` en el registro RX.
+
+La condición utilizada es:
+
+`rx_load = rx_done ∧ rx_valid`
+
+Por otra parte, si la recepción termina pero el dato no es considerado
+válido, se genera la condición de descarte:
+
+`discard = rx_done ∧ ¬rx_valid`
+
+De esta manera se distinguen claramente los casos de recepción válida e
+inválida.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `rx_done` | 1 bit | Entrada | Indica que el receptor UART ha completado una operación de recepción. |
+| `rx_valid` | 1 bit | Entrada | Indica que el resultado de la recepción cumple las condiciones de validez establecidas por el receptor. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `rx_load` | 1 bit | Salida | Habilita la carga de `rx_data` en el registro RX. |
+| `discard` | 1 bit | Salida | Indica que la recepción finalizada no debe almacenarse. |
+
+![Diagrama de cuarto nivel de la detección de dato recibido y la lógica de descarte y recuperación.](fig/deteccion_recuperacion_uart.jpg)
+
+#### Relación con los demás módulos
+
+Este bloque se encuentra entre el receptor UART y el registro RX.
+
+El receptor proporciona las señales `rx_done` y `rx_valid`, mientras
+que el dato recibido se encuentra disponible directamente mediante
+`rx_data`.
+
+El flujo de datos es:
+
+**UART RX → `rx_data` → Registro RX**
+
+Mientras que el flujo de control es:
+
+**UART RX → `rx_done`, `rx_valid` → Detección/recuperación → `rx_load` → Registro RX**
+
+Por lo tanto, `rx_data` no necesita atravesar la lógica de detección.
+Esta lógica únicamente determina si el registro RX debe aceptar o no el
+dato proporcionado por el receptor.
+
+#### Funcionamiento
+
+El funcionamiento del bloque depende de la combinación de `rx_done` y
+`rx_valid`.
+
+Cuando:
+
+`rx_done = 0`
+
+no existe una nueva recepción completada. Por lo tanto:
+
+`rx_load = 0`
+
+`discard = 0`
+
+Si la recepción ha finalizado y el dato es válido:
+
+`rx_done = 1`
+
+`rx_valid = 1`
+
+entonces:
+
+`rx_load = 1`
+
+`discard = 0`
+
+En este caso, el registro RX puede almacenar el valor presente en
+`rx_data`.
+
+Por el contrario, si la recepción finaliza pero el resultado no es
+válido:
+
+`rx_done = 1`
+
+`rx_valid = 0`
+
+se obtiene:
+
+`rx_load = 0`
+
+`discard = 1`
+
+En este caso el dato no debe cargarse en el registro RX.
+
+La lógica puede resumirse mediante la siguiente tabla:
+
+| `rx_done` | `rx_valid` | `rx_load` | `discard` | Acción |
+|:---:|:---:|:---:|:---:|---|
+| 0 | 0 | 0 | 0 | No existe una recepción terminada. |
+| 0 | 1 | 0 | 0 | No se realiza ninguna carga mientras la recepción no haya finalizado. |
+| 1 | 0 | 0 | 1 | El dato recibido se descarta. |
+| 1 | 1 | 1 | 0 | El dato recibido se almacena en el registro RX. |
+
+#### Detección de dato recibido
+
+La detección de un nuevo dato disponible se realiza mediante la
+combinación de la indicación de finalización y la indicación de validez.
+
+La expresión utilizada es:
+
+`rx_load = rx_done ∧ rx_valid`
+
+Por lo tanto, el registro RX solamente recibe una habilitación de carga
+cuando ambas condiciones se cumplen simultáneamente.
+
+Cuando `rx_load = 1`, el registro RX realiza conceptualmente la
+operación:
+
+`RX_next = rx_data`
+
+Si `rx_load = 0`, el contenido previamente almacenado se conserva:
+
+`RX_next = RX`
+
+Esto evita que una recepción incompleta o inválida sobrescriba un dato
+recibido correctamente con anterioridad.
+
+#### Descarte y recuperación
+
+La condición de descarte se produce cuando el receptor indica que una
+recepción ha terminado, pero la validación determina que el resultado
+no debe aceptarse.
+
+La expresión correspondiente es:
+
+`discard = rx_done ∧ ¬rx_valid`
+
+Cuando `discard = 1`, no se genera `rx_load` y, por lo tanto, el registro
+RX conserva su contenido anterior.
+
+Después de esta condición, el receptor puede regresar a su estado de
+reposo y quedar preparado para detectar el inicio de una nueva
+recepción.
+
+De esta forma, la recuperación no requiere almacenar el dato inválido ni
+modificar el último dato válido disponible para el procesador.
+
+#### Diseño y justificación técnica
+
+Se mantiene separada la finalización de una recepción de la aceptación
+del dato. Esto permite distinguir entre el hecho de haber completado una
+operación UART y el hecho de haber recibido información considerada
+válida.
+
+La lógica propuesta es sencilla y puede implementarse de forma
+combinacional a partir de `rx_done` y `rx_valid`. Por esta razón, este
+bloque no requiere almacenar un estado adicional para decidir si debe
+generarse `rx_load`.
+
+Además, mantener `rx_data` separado de la lógica de validación simplifica
+la ruta de datos: el receptor entrega directamente el dato al registro
+RX y la señal `rx_load` determina si dicho dato debe almacenarse.
+
+#### Comportamiento durante el reset
+
+Debido a que `rx_load` y `discard` se obtienen directamente a partir de
+`rx_done` y `rx_valid`, su condición después del reset depende del estado
+inicial de estas señales en el receptor UART.
+
+El receptor debe regresar a su condición de reposo durante el reset y no
+indicar una recepción finalizada. Por lo tanto, después del reinicio no
+debe generarse una carga accidental del registro RX.
+
+Conceptualmente:
+
+`rx_done = 0  →  rx_load = 0`
+
+y:
+
+`rx_done = 0  →  discard = 0`
+
+#### Casos especiales y condiciones de borde
+
+La presencia de `rx_valid = 1` por sí sola no debe provocar la carga del
+registro RX. Para aceptar el dato también debe haberse completado la
+recepción.
+
+De igual forma, `rx_done = 1` por sí sola tampoco garantiza que el dato
+sea almacenado, ya que todavía debe cumplirse la condición
+`rx_valid = 1`.
+
+Esto garantiza que solamente la combinación:
+
+`rx_done = 1 ∧ rx_valid = 1`
+
+produzca `rx_load = 1`.
+
+Cuando una recepción sea inválida, el contenido anterior del registro RX
+debe mantenerse sin cambios.
+
+#### Estrategia de validación
+
+La validación del módulo se realizará comprobando las cuatro
+combinaciones posibles de las entradas `rx_done` y `rx_valid`.
+
+Se verificará especialmente que para:
+
+`rx_done = 1, rx_valid = 1`
+
+se obtenga:
+
+`rx_load = 1, discard = 0`
+
+y que para:
+
+`rx_done = 1, rx_valid = 0`
+
+se obtenga:
+
+`rx_load = 0, discard = 1`
+
+Posteriormente, el bloque se integrará con UART RX y el registro RX. Se
+realizará una recepción válida y se comprobará que el dato sea
+almacenado. Después se provocará una condición considerada inválida y se
+verificará que el contenido anterior del registro RX permanezca sin
+modificaciones.
+
+Finalmente, se comprobará que después de una recepción descartada el
+receptor pueda regresar a su condición de reposo y procesar
+correctamente una nueva recepción.
+
+
 ---
 
 ## 8. Mapa de memoria, registros y organización de datos
