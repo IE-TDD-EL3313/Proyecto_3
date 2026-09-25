@@ -973,6 +973,243 @@ verificará que la referencia temporal generada permita realizar
 correctamente la transmisión y recepción a la velocidad de comunicación
 establecida de 115200 baudios.
 
+### 7.4 Transmisor UART
+
+El transmisor UART es el bloque encargado de convertir el dato almacenado
+en el registro TX desde su representación paralela a una secuencia serial
+que pueda enviarse hacia la computadora mediante la señal física
+`uart_tx`.
+
+Para realizar esta operación, el transmisor utiliza la referencia temporal
+`baud_tick` proporcionada por el generador de baud. El funcionamiento del
+bloque es coordinado mediante una máquina de estados y un contador de
+posición, los cuales controlan el avance de la transmisión.
+
+#### Objetivo
+
+El objetivo del transmisor UART es realizar la conversión paralelo-serie
+del dato almacenado en el registro TX y controlar la secuencia temporal
+necesaria para enviarlo mediante `uart_tx`.
+
+El módulo debe mantener el dato estable durante cada intervalo de
+transmisión y avanzar solamente cuando la referencia temporal
+`baud_tick` indique que corresponde continuar con la siguiente etapa.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del transmisor. |
+| `tx_data` | Según implementación del UART | Entrada | Dato paralelo proveniente del registro TX. |
+| `tx_start` | 1 bit | Entrada | Solicitud para iniciar la transmisión de un nuevo dato. |
+| `baud_tick` | 1 bit | Entrada | Referencia temporal proporcionada por el generador de baud. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `uart_tx` | 1 bit | Salida | Señal serial de transmisión hacia la computadora. |
+| `estado_TX` | Según implementación | Salida | Información del estado actual del transmisor utilizada por la lógica de control/estado. |
+
+![Diagrama de cuarto nivel del transmisor UART.](fig/uart_tx.jpg)
+
+#### Relación con los demás módulos
+
+El transmisor recibe `tx_data` desde el registro TX y utiliza
+`baud_tick`, generado por el módulo de baud, como referencia para el
+avance de la transmisión.
+
+El flujo principal de información puede representarse como:
+
+**Registro TX → `tx_data` → UART TX → `uart_tx`**
+
+Por otra parte, la temporización sigue el recorrido:
+
+**Generador de baud → `baud_tick` → UART TX**
+
+El transmisor también proporciona información mediante `estado_TX`, la
+cual puede ser utilizada por el registro de control y estado para
+informar al procesador acerca de la condición actual del bloque.
+
+#### Funcionamiento
+
+El transmisor se divide internamente en una sección de datos y una
+sección de control.
+
+La sección de datos se encarga de mantener la información que será
+transmitida y de colocar sobre `uart_tx` el valor correspondiente en
+cada etapa de la transmisión.
+
+La sección de control determina cuándo cargar un nuevo dato, cuándo
+avanzar dentro de la transmisión y cuándo finalizar el envío. Para ello
+utiliza una máquina de estados y un contador de posición.
+
+De manera general, el proceso comienza cuando se recibe `tx_start`.
+La máquina de estados abandona su condición de reposo e inicia la
+secuencia de transmisión. Posteriormente, cada activación válida de
+`baud_tick` permite avanzar en el proceso hasta completar el dato.
+
+Una vez finalizada la transmisión, el bloque retorna al estado de reposo
+y queda preparado para aceptar una nueva solicitud.
+
+#### Diseño y justificación técnica
+
+La separación entre la ruta de datos y la lógica de control permite
+mantener una estructura modular. El registro o estructura de
+desplazamiento se encarga de la información transmitida, mientras que la
+máquina de estados determina el orden de las operaciones.
+
+El contador de posición permite identificar el avance dentro de la
+transmisión sin necesidad de representar cada posición mediante un
+estado diferente de la máquina.
+
+Esta organización reduce la complejidad de la FSM y permite que la
+temporización permanezca controlada por `baud_tick`, mientras que toda
+la lógica secuencial continúa sincronizada con `clk_i`.
+
+#### Máquina de estados del transmisor
+
+La lógica de control del transmisor se organiza mediante una máquina de
+estados finitos. En el diseño propuesto se consideran los estados
+`IDLE`, `START`, `DATA` y `STOP`.
+
+- **IDLE:** el transmisor permanece en reposo mientras espera una
+  solicitud `tx_start`.
+- **START:** inicia la secuencia de transmisión.
+- **DATA:** se realiza el envío secuencial de los datos. Un contador
+  permite determinar cuándo se ha alcanzado la última posición.
+- **STOP:** corresponde a la etapa final de la transmisión antes de
+  regresar al estado de reposo.
+
+Las transiciones principales se representan conceptualmente como:
+
+**IDLE → START**
+
+cuando:
+
+$$
+tx\_start = 1
+$$
+
+Si no existe una solicitud de transmisión:
+
+$$
+tx\_start = 0
+$$
+
+la máquina permanece en `IDLE`.
+
+Desde `START` se avanza a `DATA` cuando se presenta la referencia
+temporal correspondiente:
+
+$$
+baud\_tick = 1
+$$
+
+Mientras no se haya alcanzado la última posición de datos, la máquina
+permanece en `DATA`:
+
+$$
+baud\_tick = 1 \land \neg fin\_trama
+$$
+
+Cuando se alcanza la última posición:
+
+$$
+baud\_tick = 1 \land fin\_trama
+$$
+
+la máquina avanza hacia `STOP`.
+
+Finalmente, después de completar el intervalo correspondiente a `STOP`,
+la máquina regresa al estado `IDLE`, quedando disponible para una nueva
+transmisión.
+
+![Máquina de estados del transmisor UART.](fig/fsm_uart_tx.jpg)
+
+#### Control interno del transmisor
+
+La máquina de estados utiliza el contador de posición para determinar
+el avance de la transmisión. De manera general, el contador recibe una
+habilitación `enable_cnt` y avanza de acuerdo con `baud_tick`.
+
+El contador produce la señal `fin_trama`, que informa a la máquina de
+estados que se alcanzó la última posición correspondiente a los datos.
+
+La relación entre ambos bloques puede representarse como:
+
+**FSM TX → `enable_cnt` → Contador**
+
+y:
+
+**Contador → `fin_trama` → FSM TX**
+
+Además, la FSM genera las señales internas necesarias para controlar la
+carga y el desplazamiento de la información que será transmitida.
+
+#### Comportamiento durante el reset
+
+Cuando `rst_i` se encuentra activo, el transmisor debe regresar a su
+condición inicial. La máquina de estados se coloca en `IDLE`, el
+contador de posición vuelve a su valor inicial y la lógica de
+transmisión queda preparada para comenzar una nueva operación.
+
+Conceptualmente:
+
+$$
+rst_i = 1
+\quad\Rightarrow\quad
+estado_{TX}=IDLE
+$$
+
+y:
+
+$$
+rst_i = 1
+\quad\Rightarrow\quad
+contador_{TX}=0
+$$
+
+Esto evita que una transmisión incompleta continúe después de un
+reinicio del sistema.
+
+#### Casos especiales y condiciones de borde
+
+Mientras el transmisor se encuentre realizando una operación, una nueva
+solicitud de transmisión no debe alterar la secuencia actualmente en
+curso. El siguiente dato solamente debe comenzar a transmitirse cuando
+el bloque haya regresado a su condición disponible.
+
+Asimismo, el contador debe indicar `fin_trama` únicamente cuando se haya
+alcanzado la última posición correspondiente, evitando que la máquina de
+estados abandone `DATA` de forma anticipada.
+
+El transmisor también debe permanecer sincronizado con `baud_tick` para
+evitar que la salida avance más de una posición durante un mismo
+intervalo de transmisión.
+
+#### Estrategia de validación
+
+La validación del transmisor se realizará mediante simulación. Se
+aplicará un dato conocido en `tx_data` y posteriormente se activará
+`tx_start`.
+
+Durante la simulación se comprobará que la máquina de estados siga la
+secuencia esperada:
+
+**IDLE → START → DATA → STOP → IDLE**
+
+También se verificará que el contador avance de acuerdo con
+`baud_tick`, que `fin_trama` sea generado en la posición correspondiente
+y que la salida `uart_tx` cambie de acuerdo con la secuencia controlada
+por el transmisor.
+
+Finalmente, el transmisor se integrará con el generador de baud y el
+receptor UART para realizar una prueba de lazo cerrado, verificando que
+el dato transmitido pueda recuperarse correctamente.
+
+
 
 ---
 
