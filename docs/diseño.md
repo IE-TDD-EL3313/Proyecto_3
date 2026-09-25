@@ -1209,7 +1209,279 @@ Finalmente, el transmisor se integrará con el generador de baud y el
 receptor UART para realizar una prueba de lazo cerrado, verificando que
 el dato transmitido pueda recuperarse correctamente.
 
+### 7.5 Receptor UART
 
+El receptor UART es el bloque encargado de recibir la información serial
+proveniente de la computadora mediante la señal física `uart_rx` y
+reconstruir el dato para que pueda ser utilizado por el resto del
+sistema.
+
+Para realizar esta operación, el receptor utiliza la referencia temporal
+`baud_tick` generada por el módulo de baud. El proceso de recepción es
+coordinado mediante una máquina de estados y un contador de posición,
+los cuales permiten identificar el inicio, la recepción de los datos y
+la finalización de la comunicación.
+
+#### Objetivo
+
+El objetivo del receptor UART es realizar la conversión serie-paralelo
+de la información presente en `uart_rx`, controlar el avance temporal
+de la recepción y proporcionar al resto del periférico la información
+necesaria para determinar cuándo se ha completado correctamente un nuevo
+dato.
+
+Al finalizar una recepción, el bloque proporciona el dato reconstruido
+mediante `rx_data`, una indicación de finalización mediante `rx_done` y
+el resultado de la validación mediante `rx_valid`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del receptor. |
+| `uart_rx` | 1 bit | Entrada | Señal serial proveniente de la computadora. |
+| `baud_tick` | 1 bit | Entrada | Referencia temporal proporcionada por el generador de baud. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `rx_data` | Según implementación del UART | Salida | Dato reconstruido a partir de la información recibida serialmente. |
+| `rx_done` | 1 bit | Salida | Indica que se ha completado el proceso de recepción de un dato. |
+| `rx_valid` | 1 bit | Salida | Indica que la recepción completada cumple las condiciones de validez definidas por el receptor. |
+| `estado_RX` | Según implementación | Salida | Información del estado actual del receptor utilizada por la lógica de control/estado. |
+
+![Diagrama de cuarto nivel del receptor UART.](fig/uart_rx.jpg)
+
+#### Relación con los demás módulos
+
+El receptor UART se conecta directamente con la entrada física
+`uart_rx`. La información recibida es procesada internamente hasta
+obtener el dato paralelo `rx_data`.
+
+El flujo principal de recepción puede representarse como:
+
+**`uart_rx` → UART RX → `rx_data` → Registro RX**
+
+El generador de baud proporciona la referencia temporal utilizada
+durante este proceso:
+
+**Generador de baud → `baud_tick` → UART RX**
+
+Además, las señales `rx_done` y `rx_valid` son utilizadas por la lógica
+de detección y recuperación para determinar si el dato reconstruido
+puede almacenarse en el registro RX.
+
+El flujo de control correspondiente es:
+
+**UART RX → `rx_done`, `rx_valid` → Lógica de detección/recuperación → `rx_load`**
+
+Finalmente, `estado_RX` permite comunicar información sobre la condición
+del receptor al registro de control y estado del UART.
+
+#### Funcionamiento
+
+El receptor permanece inicialmente esperando la llegada de una nueva
+transmisión sobre `uart_rx`. Cuando se detecta el comienzo de una
+recepción, la máquina de estados abandona su condición de reposo e inicia
+el proceso de adquisición.
+
+Durante la recepción, el bloque de muestreo y registro de desplazamiento
+captura progresivamente la información presente en `uart_rx`. El avance
+se realiza utilizando `baud_tick` como referencia temporal.
+
+Paralelamente, un contador de posición mantiene el seguimiento del
+avance dentro de la recepción. Cuando se alcanza la última posición de
+datos, el contador genera `fin_datos`, permitiendo a la máquina de
+estados continuar hacia la etapa final.
+
+Una vez completado el proceso, el receptor proporciona el dato mediante
+`rx_data` y genera `rx_done`. La recepción también es evaluada para
+producir `rx_valid`, señal que posteriormente determina si el dato puede
+ser almacenado o debe ser descartado.
+
+#### Diseño y justificación técnica
+
+El receptor se divide conceptualmente en una ruta de datos y una lógica
+de control. La ruta de datos realiza el muestreo y almacenamiento
+temporal de la información serial, mientras que la lógica de control
+coordina las diferentes etapas de la recepción.
+
+El uso de un contador de posición evita representar individualmente cada
+posición de datos como un estado diferente de la máquina. De esta forma,
+la FSM puede mantenerse compacta y concentrarse en las etapas generales
+de la recepción.
+
+La validación se mantiene separada de la carga del registro RX. Esta
+separación permite que finalizar una recepción no implique
+automáticamente almacenar el dato, ya que primero debe comprobarse que
+la recepción sea válida.
+
+#### Máquina de estados del receptor
+
+Para controlar el proceso de recepción se utiliza una máquina de estados
+finitos. En el diseño propuesto se consideran los estados `IDLE`,
+`START`, `DATA` y `STOP`.
+
+- **IDLE:** el receptor permanece esperando el inicio de una nueva
+  transmisión.
+- **START:** corresponde a la detección y procesamiento del comienzo de
+  la recepción.
+- **DATA:** se reciben progresivamente los datos y el contador controla
+  la posición actual.
+- **STOP:** corresponde a la etapa final de la recepción, después de la
+  cual se determina la finalización del dato y se regresa al estado de
+  reposo.
+
+Mientras la línea de recepción permanezca en su condición de reposo, la
+máquina se mantiene en `IDLE`:
+
+$$
+uart\_rx = 1
+\quad\Rightarrow\quad
+estado_{next}=IDLE
+$$
+
+Cuando se detecta la condición de inicio:
+
+$$
+uart\_rx = 0
+\quad\Rightarrow\quad
+IDLE \rightarrow START
+$$
+
+Una vez alcanzada la referencia temporal correspondiente en `START`, la
+máquina continúa hacia la recepción de los datos:
+
+$$
+baud\_tick = 1
+\quad\Rightarrow\quad
+START \rightarrow DATA
+$$
+
+Mientras no se haya alcanzado la última posición de datos, el receptor
+permanece en `DATA`:
+
+$$
+baud\_tick = 1 \land \neg fin\_datos
+\quad\Rightarrow\quad
+DATA \rightarrow DATA
+$$
+
+Cuando se alcanza la última posición:
+
+$$
+baud\_tick = 1 \land fin\_datos
+\quad\Rightarrow\quad
+DATA \rightarrow STOP
+$$
+
+Finalmente, una vez completada la etapa `STOP`, la máquina retorna a
+`IDLE` y queda disponible para una nueva recepción.
+
+![Máquina de estados del receptor UART.](fig/fsm_uart_rx.jpg)
+
+#### Control interno del receptor
+
+La máquina de estados y el contador de posición trabajan en conjunto
+para controlar la recepción. La FSM habilita el conteo mediante
+`enable_cnt`, mientras que el contador informa cuándo se ha alcanzado la
+última posición mediante `fin_datos`.
+
+La relación entre ambos bloques puede representarse como:
+
+**FSM RX → `enable_cnt` → Contador**
+
+y:
+
+**Contador → `fin_datos` → FSM RX**
+
+La máquina de estados también genera las señales internas necesarias
+para controlar el muestreo y desplazamiento de los datos recibidos.
+
+Al finalizar el proceso, se genera `rx_done`. La información recibida es
+evaluada para obtener `rx_valid`. Estas dos señales se utilizan
+posteriormente para decidir si `rx_data` debe cargarse en el registro RX
+o descartarse.
+
+#### Comportamiento durante el reset
+
+Cuando `rst_i` se encuentra activo, el receptor regresa a su condición
+inicial. La máquina de estados vuelve a `IDLE` y el contador de posición
+se reinicia.
+
+Conceptualmente:
+
+$$
+rst_i = 1
+\quad\Rightarrow\quad
+estado_{RX}=IDLE
+$$
+
+$$
+rst_i = 1
+\quad\Rightarrow\quad
+contador_{RX}=0
+$$
+
+Además, las indicaciones asociadas con una recepción completada deben
+permanecer inactivas:
+
+$$
+rst_i = 1
+\quad\Rightarrow\quad
+rx\_done=0
+$$
+
+Esto evita que después de un reinicio se interprete una recepción
+incompleta como un nuevo dato disponible.
+
+#### Casos especiales y condiciones de borde
+
+Si no se detecta el comienzo de una nueva recepción, la máquina debe
+permanecer en `IDLE` sin modificar el dato previamente almacenado en el
+registro RX.
+
+Una recepción incompleta o considerada inválida no debe provocar la
+carga del registro RX. La finalización del proceso y la validez del dato
+se tratan como condiciones diferentes: `rx_done` indica que el proceso
+terminó, mientras que `rx_valid` indica si el resultado puede ser
+aceptado.
+
+Por lo tanto, la presencia de:
+
+$$
+rx\_done=1
+$$
+
+no implica por sí sola que el dato deba almacenarse. La decisión final
+se realiza mediante la lógica de detección y recuperación descrita en la
+sección siguiente.
+
+#### Estrategia de validación
+
+La validación del receptor se realizará inicialmente mediante simulación.
+Se aplicará sobre `uart_rx` una secuencia serial conocida y se verificará
+el recorrido de la máquina de estados:
+
+**IDLE → START → DATA → STOP → IDLE**
+
+También se comprobará que el contador avance de acuerdo con `baud_tick`
+y que `fin_datos` se active únicamente después de alcanzar la posición
+correspondiente.
+
+Al finalizar la recepción se verificará que `rx_data` contenga la
+información reconstruida y que `rx_done` indique correctamente la
+finalización del proceso.
+
+También se probarán condiciones de recepción inválida para verificar que
+la lógica de validación pueda diferenciarlas de una recepción aceptada.
+
+Finalmente, durante la integración se realizará una prueba de lazo
+cerrado conectando el transmisor con el receptor y comprobando que un
+dato enviado por UART TX pueda ser reconstruido correctamente por
+UART RX.
 
 ---
 
