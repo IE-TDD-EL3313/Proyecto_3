@@ -2729,7 +2729,14 @@ Inicialización → colocación concurrente (J1 por VGA/botones, J2 por UART) �
 
 - **Arquitectura del núcleo:** *(justificar ciclo único vs. multiciclo, tipo de unidad de control)*
 - **Organización de memoria:** *(justificar bus dedicado de ROM vs. bus compartido de RAM/periféricos)*
-- **Diseño VGA:** *(justificar resolución de la cuadrícula de tiles y sincronización entre dominio de 100 MHz y 25 MHz en la memoria de doble puerto)*
+- **Diseño VGA:** se eligió una cuadrícula de 20×15 bloques de 32×32 píxeles porque 32 es
+  potencia de 2, lo que permite calcular fila/columna de tile tomando directamente los bits
+  superiores de `hcount`/`vcount` (desplazamiento) en vez de un divisor aritmético completo, y
+  porque esa cuadrícula alcanza para representar ambos tableros 8×8 más el HUD. La
+  sincronización entre el dominio de 100 MHz (escritura del CPU) y el de 25 MHz (lectura de
+  video) se resuelve mediante una memoria de tiles de doble puerto y doble reloj, primitiva
+  nativa de la FPGA, sin necesidad de lógica de sincronización adicional diseñada por el
+  equipo.
 - **Diseño UART:** *(justificar reutilización del Proyecto 2 y ajustes necesarios)*
 - **Organización de tableros:** *(justificar estructura de datos elegida)*
 - **Protocolo de comunicación:** *(justificar formato de trama elegido)*
