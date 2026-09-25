@@ -352,10 +352,93 @@ transmisor, el receptor y las máquinas de estado asociadas se desarrolla
 con mayor detalle en los diagramas de cuarto nivel.
 
 ### 6.3 Periférico VGA y sistema de relojes
-Bloques mínimos: PLL / generador del reloj de píxel; contadores horizontal y vertical; generadores de HSYNC/VSYNC; detector de región visible; cálculo de fila/columna del tile; memoria de tiles de doble puerto; generador de color; interfaz de escritura desde el procesador. Debe diferenciar el dominio de 100 MHz (procesador) del dominio de 25 MHz (VGA).
+El bloque VGA de tercer nivel se organiza en cuatro subsistemas: generación del reloj de
+píxel (PLL), generación de temporización (contadores y sincronismos), memoria de video de
+doble puerto, y generación de color/RGB. El procesador solo interactúa con este bloque a
+través de una interfaz de escritura tipo memoria (`vga_we_i`, `vga_addr_i`, `vga_wdata_i`),
+mapeada en el rango `0x0001_1000`–`0x0001_17FF`.
+ 
+#### Señales de entrada
+ 
+| Señal | Ancho | Origen | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Externo (oscilador) | Reloj del sistema, 100 MHz. |
+| `rst_i` | 1 bit | Externo | Reinicio del periférico. |
+| `vga_we_i` | 1 bit | CPU / decodificador MMIO | Habilitación de escritura de una casilla. |
+| `vga_addr_i[8:0]` | 9 bits | CPU / decodificador MMIO | Dirección lineal de tile (`fila*20+columna`). |
+| `vga_wdata_i[31:0]` | 32 bits | CPU / decodificador MMIO | Palabra a escribir en la casilla (color en `[2:0]`). |
+ 
+#### Señales de salida
+ 
+| Señal | Ancho | Destino | Descripción |
+|---|---|---|---|
+| `vga_hs_o` | 1 bit | Monitor VGA | Sincronismo horizontal. |
+| `vga_vs_o` | 1 bit | Monitor VGA | Sincronismo vertical. |
+| `vga_r_o[3:0]` | 4 bits | Monitor VGA | Componente roja. |
+| `vga_g_o[3:0]` | 4 bits | Monitor VGA | Componente verde. |
+| `vga_b_o[3:0]` | 4 bits | Monitor VGA | Componente azul. |
+ 
+#### Señales internas relevantes (entre subbloques)
+ 
+| Señal | Ancho | Bloque que la genera | Descripción |
+|---|---|---|---|
+| `clk_pix_o` | 1 bit | PLL | Reloj de píxel derivado, 25 MHz. |
+| `locked_o` | 1 bit | PLL | Indica que el PLL ya estabilizó su salida. |
+| `hcount` | 10 bits | Generador de temporización | Posición horizontal del haz (0–799). |
+| `vcount` | 10 bits | Generador de temporización | Línea actual del cuadro (0–524). |
+| `video_on` | 1 bit | Generador de temporización | 1 si el haz está en el área visible 640×480. |
+| `tile_data` | 32 bits | Memoria de video | Palabra leída de la casilla actual. |
+ 
+#### Explicación del bloque
+ 
+El `PLL` recibe `clk_i` (100 MHz) y genera `clk_pix_o` (25 MHz), único reloj usado por el resto
+del bloque VGA. El `Generador de temporización` produce `hcount`/`vcount` mediante dos
+contadores encadenados, y a partir de ellos deriva `vga_hs_o`, `vga_vs_o` y `video_on` por
+comparación de rango contra los tiempos estándar de 640×480@60Hz. La `Memoria de video`
+resuelve internamente la dirección de tile correspondiente a (`hcount`, `vcount`) y expone
+`tile_data`, mientras en paralelo acepta escrituras del CPU por su puerto A
+(`vga_we_i`, `vga_addr_i`, `vga_wdata_i`) en el dominio de 100 MHz — de ahí que la memoria sea
+de **doble puerto y doble reloj**, siendo el único punto donde se cruzan ambos dominios de
+reloj del sistema. Finalmente, el `Generador de color y RGB` traduce `tile_data` en los
+niveles físicos `vga_r_o`/`vga_g_o`/`vga_b_o`, forzando negro cuando `video_on = 0`.
+
 
 ### 6.4 Periféricos locales
-Bloques mínimos: sincronizadores de entradas; debouncing; detectores de flanco; registro de estado de botones; registro de datos de displays; selector de dígito; decodificador de 7 segmentos; registro del LED; registro de control del buzzer; selector de tono; divisor de frecuencia; contador de duración del sonido.
+El bloque de periféricos locales agrupa cuatro subsistemas independientes entre sí, todos
+mapeados en memoria y accedidos por el bus estándar de periféricos (`addr_i[1:0]`,
+`wdata_i[31:0]`, `we_i`, `rdata_o[31:0]`): entradas del Jugador 1, displays de 7 segmentos,
+LED de estado y buzzer.
+ 
+#### Señales de entrada
+ 
+| Señal | Ancho | Origen | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Externo | Reloj del sistema, 100 MHz. |
+| `rst_i` | 1 bit | Externo | Reinicio de los periféricos. |
+| `btn_raw_i[6:0]` | 7 bits | Botones físicos | Arriba, abajo, izquierda, derecha, SEL, OK, RST sin filtrar. |
+| `addr_i[1:0]` | 2 bits | CPU / decodificador MMIO | Selección de registro interno por periférico. |
+| `wdata_i[31:0]` | 32 bits | CPU / decodificador MMIO | Dato de escritura (displays, LED, buzzer). |
+| `we_i` | 1 bit | CPU / decodificador MMIO | Habilitación de escritura. |
+ 
+#### Señales de salida
+ 
+| Señal | Ancho | Destino | Descripción |
+|---|---|---|---|
+| `rdata_o[31:0]` | 32 bits | CPU / decodificador MMIO | Lectura del registro seleccionado. |
+| `seg_o[6:0]` | 7 bits | Displays físicos | Patrón de segmentos activos. |
+| `anode_o[3:0]` | 4 bits | Displays físicos | Ánodo del dígito actualmente encendido. |
+| `led_o[2:0]` | 3 bits | LED físico | Indicador de fase del juego. |
+| `buzz_pwm_o` | 1 bit | Buzzer físico | Señal PWM de audio. |
+ 
+#### Explicación del bloque
+ 
+Las entradas físicas pasan por una cadena de sincronización, filtrado antirrebote y
+detección de flanco antes de quedar disponibles como pulsos en el registro de estado,
+leído por el CPU en `0x0001_0120`. Los displays de 7 segmentos reciben 4 dígitos BCD
+(`0x0001_0130`) y los multiplexan por persistencia de visión hacia `seg_o`/`anode_o`. El LED
+de estado (`0x0001_0138`) refleja directamente la fase actual del juego. El buzzer
+(`0x0001_0140`) recibe un código de tono y un disparo puntual, y genera de forma autónoma una
+señal PWM de duración fija sin requerir intervención continua del software.
 
 ![Diagrama de tercer nivel del sistema1](fig/diagrama_tercer_nivel1.jpeg)
 
