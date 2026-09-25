@@ -1761,8 +1761,143 @@ correctamente una nueva recepción.
 | LED de estado | Datos | `0x0001_0138` |
 | Buzzer | Control | `0x0001_0140` |
 
-### 8.3 Organización de tableros en RAM
-*(Redactar: estructura propuesta por tablero, p. ej. arreglo de 64 posiciones, campos de turno, contadores de partidas ganadas, variables temporales de la partida)*
+### 8.3 Organización lógica de la RAM
+
+La memoria RAM del sistema se encuentra ubicada en el intervalo de
+direcciones comprendido entre `0x0000_2000` y `0x0000_2FFF`. Esta memoria
+es utilizada por el procesador para almacenar información modificable
+durante la ejecución del programa.
+
+A diferencia de la ROM, cuyo contenido corresponde al programa ejecutado
+por el procesador, la RAM almacena los datos necesarios para mantener el
+estado actual de la aplicación.
+
+#### Organización propuesta
+
+Para facilitar el acceso desde el programa en ensamblador, se propone
+dividir lógicamente la RAM en diferentes regiones de acuerdo con la
+función de los datos almacenados.
+
+La organización general propuesta es:
+
+| Región | Contenido |
+|---|---|
+| Tablero local | Estado de las posiciones correspondientes al tablero del jugador local. |
+| Tablero remoto | Información conocida sobre el tablero del jugador remoto. |
+| Información de barcos | Datos necesarios para representar la posición y estado de los barcos. |
+| Estado de la partida | Variables utilizadas para representar la etapa actual del juego. |
+| Control de turnos | Información utilizada para determinar el jugador que posee el turno. |
+| Resultados de disparos | Información temporal asociada con las acciones realizadas durante la partida. |
+| Variables auxiliares | Contadores, índices y datos temporales utilizados por el programa. |
+
+Esta separación es lógica y permite que el software mantenga organizada
+la información utilizada durante la ejecución.
+
+#### Direccionamiento
+
+El procesador accede a la RAM mediante `DataAddress_o[31:0]`. Debido a
+que la RAM comienza en la dirección `0x0000_2000`, la dirección interna
+puede obtenerse conceptualmente eliminando el desplazamiento
+correspondiente a la dirección base.
+
+Para accesos organizados por palabras de 32 bits, la adaptación puede
+representarse como:
+
+`ram_addr = (DataAddress_o - 0x0000_2000) / 4`
+
+De esta manera:
+
+`0x0000_2000 → palabra 0`
+
+`0x0000_2004 → palabra 1`
+
+`0x0000_2008 → palabra 2`
+
+y así sucesivamente dentro del espacio asignado a la RAM.
+
+#### Acceso desde el procesador
+
+Cuando `DataAddress_o` se encuentra dentro del intervalo asignado a la
+RAM, el decodificador de direcciones activa `sel_RAM`.
+
+La selección puede representarse conceptualmente como:
+
+`sel_RAM = 1`, si `0x0000_2000 ≤ DataAddress_o ≤ 0x0000_2FFF`
+
+Para una operación de escritura, la habilitación de la memoria se
+obtiene mediante:
+
+`we_RAM = we_o ∧ sel_RAM`
+
+Cuando `we_RAM = 1`, el valor presente en `DataOut_o[31:0]` puede ser
+almacenado en la posición seleccionada de la RAM.
+
+Durante una lectura, el dato obtenido de la memoria se entrega mediante
+`ram_rdata[31:0]` al multiplexor general de lectura:
+
+**RAM → `ram_rdata` → MUX de lectura → `DataIn_i` → CPU**
+
+#### Uso durante la ejecución del juego
+
+Al comenzar la ejecución del programa, las estructuras necesarias para
+representar el estado de la partida deben inicializarse antes de iniciar
+el intercambio de información entre los jugadores.
+
+Durante la fase de colocación, la RAM permite almacenar la información
+que representa la configuración utilizada por el juego. Posteriormente,
+durante el desarrollo de la partida, el procesador puede actualizar las
+posiciones afectadas por las acciones realizadas y conservar la
+información necesaria para controlar los turnos y el progreso del juego.
+
+La utilización de regiones lógicas independientes facilita que las
+rutinas en ensamblador accedan a cada estructura mediante direcciones
+base y desplazamientos conocidos.
+
+#### Justificación de la organización
+
+La división lógica de la memoria permite separar la información según su
+función y simplifica el desarrollo del programa en ensamblador.
+
+Además, utilizar posiciones conocidas dentro de la RAM permite acceder a
+las diferentes estructuras mediante operaciones convencionales de carga
+y almacenamiento del procesador, sin requerir hardware adicional para
+distinguir cada variable del juego.
+
+Esta organización también facilita la depuración, ya que durante las
+pruebas es posible inspeccionar regiones específicas de la memoria y
+comprobar de forma independiente el contenido asociado con cada parte
+del estado de la partida.
+
+#### Condiciones de borde
+
+Los accesos destinados a la RAM deben permanecer dentro del intervalo:
+
+`0x0000_2000 – 0x0000_2FFF`
+
+Una dirección fuera de este intervalo no debe activar `sel_RAM`.
+
+Asimismo, al utilizar accesos por palabras de 32 bits, las estructuras
+de software deben respetar la organización y alineamiento definidos para
+evitar que dos variables utilicen accidentalmente la misma posición de
+memoria.
+
+#### Estrategia de validación
+
+La organización de la RAM se verificará inicialmente mediante
+simulación, realizando operaciones de escritura y lectura sobre
+diferentes posiciones dentro del intervalo asignado.
+
+Se comprobará que una escritura con `we_RAM = 1` modifique únicamente la
+posición seleccionada y que una lectura posterior permita recuperar el
+mismo valor mediante `ram_rdata`.
+
+También se probarán las direcciones inicial y final del espacio asignado
+a la RAM, así como direcciones externas al intervalo, verificando que el
+decodificador active `sel_RAM` únicamente cuando corresponda.
+
+Durante la integración con el programa en ensamblador se comprobará que
+las diferentes estructuras lógicas puedan actualizarse sin interferir
+entre sí.
 
 ### 8.4 Interfaz estándar de periféricos
 Todos los periféricos de registro comparten la interfaz de 32 bits (`clk_i`, `rst_i`, `write_enable_i`, `addr_i[1:0]`, `wdata_i[31:0]`, `rdata_o[31:0]`). El VGA es la excepción: usa un campo de dirección más ancho por comportarse como memoria de video.
