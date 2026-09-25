@@ -666,7 +666,7 @@ $$
 
 | Señal | Ancho | Dirección | Descripción |
 |---|---:|---|---|
-| `rdata_status[31:0]` | 32 bits | Salida | Palabra que contiene la información de control y estado disponible para lectura por el procesador. |
+| `control_i[31:0]` | 32 bits | Salida | Palabra que contiene la información de control y estado disponible para lectura por el procesador. |
 
 ![Diagrama de cuarto nivel del registro de control y estado del UART.](fig/control_estado_uart.jpg)
 
