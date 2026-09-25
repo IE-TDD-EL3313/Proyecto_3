@@ -90,7 +90,7 @@ El sistema recibe las interacciones físicas locales y remotas, procesa las acci
 
 El segundo nivel divide el sistema completo en sus bloques funcionales principales: núcleo RISC-V, ROM, RAM, decodificación MMIO, UART, VGA, entradas del Jugador 1, displays/LED/buzzer, y la aplicación de PC como bloque externo conectado por UART.
 
-![Diagrama de segundo nivel del sistema]fig/diagrama_segundo_nivel.png
+![Diagrama de segundo nivel del sistema]fig/diagrama_segundo_nivel.jpg
 
 ---
 
