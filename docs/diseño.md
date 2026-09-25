@@ -1905,9 +1905,313 @@ Todos los periféricos de registro comparten la interfaz de 32 bits (`clk_i`, `r
 ---
 
 ## 9. Protocolo UART, flujo del programa y aplicación de PC
-
 ### 9.1 Protocolo de aplicación sobre UART
-*(Redactar: formato de trama; mensajes PC→FPGA —colocación de barco, disparo—; mensajes FPGA→PC —aceptación/rechazo, inicio de batalla, cambio de turno, resultado de disparo propio y recibido, resultado final—; manejo de tramas inválidas; ejemplos byte a byte)*
+
+La comunicación entre la FPGA y la aplicación ejecutada en la
+computadora del Jugador 2 se realiza mediante el periférico UART a una
+velocidad de 115200 baudios. En este proyecto, UART constituye el único
+medio de interacción del Jugador 2 con la partida.
+
+El protocolo de aplicación permite transmitir las órdenes del Jugador 2
+hacia la FPGA y enviar desde la FPGA la información necesaria para que
+la aplicación mantenga actualizada la representación de la partida.
+
+#### Formato general de las tramas
+
+Se propone utilizar un protocolo basado en caracteres ASCII. Cada
+mensaje está compuesto por un identificador seguido por los campos
+necesarios para representar la información correspondiente.
+
+Los campos se separan mediante comas y cada trama termina con el
+carácter de salto de línea `\n`.
+
+El formato general es:
+
+`TIPO,CAMPO1,CAMPO2,...\n`
+
+Esta estructura permite identificar fácilmente el comienzo lógico del
+mensaje mediante su tipo y detectar su final mediante `\n`.
+
+La utilización de caracteres ASCII facilita tanto la implementación de
+la aplicación Python como la depuración de la comunicación mediante una
+terminal serial.
+
+#### Mensajes desde la PC hacia la FPGA
+
+La aplicación del Jugador 2 debe poder enviar como mínimo dos tipos de
+órdenes: colocación de barcos y disparos.
+
+##### Colocación de barco
+
+Se define el mensaje:
+
+`P,barco,fila,columna,orientacion\n`
+
+donde:
+
+| Campo | Descripción |
+|---|---|
+| `P` | Identifica una solicitud de colocación de barco. |
+| `barco` | Identificador del barco, con valores entre 0 y 2. |
+| `fila` | Fila de la casilla inicial. |
+| `columna` | Columna de la casilla inicial. |
+| `orientacion` | Orientación del barco: `H` para horizontal o `V` para vertical. |
+
+Por ejemplo:
+
+`P,1,3,4,H\n`
+
+indica una solicitud para colocar el barco identificado como `1`,
+iniciando en la fila `3`, columna `4`, con orientación horizontal.
+
+La FPGA debe comprobar que la colocación sea válida antes de modificar
+el estado de la partida.
+
+##### Disparo
+
+Para solicitar un disparo se define el mensaje:
+
+`S,fila,columna\n`
+
+donde:
+
+| Campo | Descripción |
+|---|---|
+| `S` | Identifica una solicitud de disparo. |
+| `fila` | Fila de la casilla objetivo. |
+| `columna` | Columna de la casilla objetivo. |
+
+Por ejemplo:
+
+`S,5,2\n`
+
+representa un disparo del Jugador 2 dirigido a la casilla ubicada en la
+fila `5` y columna `2` del tablero del Jugador 1.
+
+#### Mensajes desde la FPGA hacia la PC
+
+La FPGA debe informar a la aplicación del Jugador 2 sobre los eventos
+que modifican o afectan el estado de la partida.
+
+Se proponen los siguientes tipos de mensajes.
+
+##### Resultado de colocación
+
+Cuando la FPGA procesa una solicitud de colocación, responde indicando
+si fue aceptada o rechazada.
+
+Colocación aceptada:
+
+`PA,barco\n`
+
+Por ejemplo:
+
+`PA,1\n`
+
+indica que la colocación del barco `1` fue aceptada.
+
+Si la colocación es rechazada:
+
+`PR,barco,motivo\n`
+
+Los motivos requeridos para el rechazo son:
+
+| Código | Motivo |
+|---|---|
+| `O` | El barco se traslapa con otro barco previamente colocado. |
+| `F` | La posición solicitada provoca que el barco quede fuera del tablero. |
+
+Por ejemplo:
+
+`PR,1,O\n`
+
+indica que la colocación del barco `1` fue rechazada debido a un
+traslape.
+
+#### Inicio de la fase de batalla
+
+Cuando ambos jugadores hayan completado la colocación de su flota, la
+FPGA informa a la aplicación que inicia la fase de batalla.
+
+Se utiliza:
+
+`B\n`
+
+donde `B` representa el inicio de la batalla.
+
+#### Cambio de turno
+
+Para informar a quién corresponde realizar la siguiente acción se
+utiliza:
+
+`T,jugador\n`
+
+donde `jugador` identifica al jugador que posee el turno.
+
+Por ejemplo:
+
+`T,2\n`
+
+indica que corresponde actuar al Jugador 2.
+
+#### Resultado de un disparo del Jugador 2
+
+Después de procesar un disparo enviado por la PC, la FPGA devuelve su
+resultado mediante:
+
+`SR,fila,columna,resultado\n`
+
+Se proponen los siguientes códigos para `resultado`:
+
+| Código | Resultado |
+|---|---|
+| `F` | Fallo. |
+| `I` | Impacto. |
+| `H` | Barco hundido. |
+
+Por ejemplo:
+
+`SR,5,2,I\n`
+
+indica que el disparo realizado sobre la fila `5`, columna `2`, produjo
+un impacto.
+
+#### Disparo recibido del Jugador 1
+
+Cuando el Jugador 1 realiza un disparo sobre el tablero del Jugador 2,
+la FPGA debe informar a la aplicación para que esta pueda actualizar la
+representación del tablero propio.
+
+Se utiliza:
+
+`DR,fila,columna,resultado\n`
+
+donde `resultado` utiliza los mismos códigos definidos anteriormente.
+
+Por ejemplo:
+
+`DR,3,6,F\n`
+
+indica que el Jugador 1 realizó un disparo sobre la fila `3`, columna
+`6`, del tablero del Jugador 2 y el resultado fue un fallo.
+
+#### Resultado final de la partida
+
+Cuando la partida termina, la FPGA envía:
+
+`FIN,ganador\n`
+
+donde `ganador` identifica al jugador que obtuvo la victoria.
+
+Por ejemplo:
+
+`FIN,2\n`
+
+indica que el Jugador 2 ganó la partida.
+
+El mensaje final puede ampliarse posteriormente con los campos
+necesarios para incluir el resumen de la partida requerido por el
+sistema.
+
+#### Resumen de mensajes
+
+| Dirección | Trama | Función |
+|---|---|---|
+| PC → FPGA | `P,barco,fila,columna,orientacion\n` | Solicitud de colocación de un barco. |
+| PC → FPGA | `S,fila,columna\n` | Solicitud de disparo. |
+| FPGA → PC | `PA,barco\n` | Colocación aceptada. |
+| FPGA → PC | `PR,barco,motivo\n` | Colocación rechazada. |
+| FPGA → PC | `B\n` | Inicio de la fase de batalla. |
+| FPGA → PC | `T,jugador\n` | Cambio de turno. |
+| FPGA → PC | `SR,fila,columna,resultado\n` | Resultado de un disparo del Jugador 2. |
+| FPGA → PC | `DR,fila,columna,resultado\n` | Disparo recibido desde el Jugador 1. |
+| FPGA → PC | `FIN,ganador\n` | Resultado final de la partida. |
+
+#### Validación de mensajes
+
+La aplicación Python debe validar la información introducida por el
+Jugador 2 antes de transmitirla. Esto permite evitar el envío de
+comandos evidentemente incorrectos.
+
+Sin embargo, la FPGA también debe validar todos los mensajes recibidos y
+no puede depender únicamente de la validación realizada por la
+aplicación.
+
+Un mensaje recibido debe comprobarse antes de modificar el estado de la
+partida. Entre las condiciones que deben verificarse se encuentran:
+
+- que el tipo de mensaje sea reconocido;
+- que exista la cantidad esperada de campos;
+- que los campos posean valores válidos;
+- que el identificador del barco se encuentre entre 0 y 2;
+- que la fila y columna correspondan a posiciones válidas del tablero;
+- que la orientación sea `H` o `V`;
+- que la acción corresponda con la fase actual de la partida;
+- que el jugador pueda realizar la acción en el turno correspondiente.
+
+#### Manejo de datos inválidos
+
+Cualquier mensaje que no cumpla con el formato establecido debe ser
+descartado sin modificar el estado actual de la partida.
+
+Conceptualmente:
+
+`mensaje válido → procesar comando`
+
+`mensaje inválido → descartar y conservar estado`
+
+De esta forma, un dato incorrecto recibido mediante UART no debe
+provocar la colocación de un barco, modificar un tablero, cambiar un
+turno ni generar un disparo.
+
+Después de descartar un mensaje inválido, el sistema debe continuar
+esperando una nueva trama, permitiendo recuperar la comunicación sin
+necesidad de reiniciar la partida.
+
+#### Ejemplo de comunicación
+
+Un posible intercambio durante la colocación del Jugador 2 es:
+
+PC → FPGA:
+
+`P,0,2,3,H\n`
+
+FPGA → PC:
+
+`PA,0\n`
+
+Posteriormente, si se intenta colocar otro barco en una posición que
+produce traslape:
+
+PC → FPGA:
+
+`P,1,2,4,V\n`
+
+la FPGA puede responder:
+
+`PR,1,O\n`
+
+Durante la fase de batalla, la FPGA informa el turno:
+
+FPGA → PC:
+
+`T,2\n`
+
+El Jugador 2 realiza entonces un disparo:
+
+PC → FPGA:
+
+`S,5,2\n`
+
+y la FPGA devuelve, por ejemplo:
+
+`SR,5,2,I\n`
+
+indicando que el disparo produjo un impacto.
+
+Este intercambio permite que la aplicación de PC mantenga actualizada
+la información presentada al Jugador 2 mientras la FPGA conserva el
+control del estado general de la partida.
 
 ### 9.2 Flujo del programa ensamblador
 Inicialización → colocación concurrente (J1 por VGA/botones, J2 por UART) → fase de batalla (turnos, disparos, actualización) → fin de partida → reinicio (`BTN_RST`) conservando el contador de partidas ganadas.
