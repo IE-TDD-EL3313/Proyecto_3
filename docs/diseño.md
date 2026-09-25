@@ -394,7 +394,141 @@ Cada módulo funcional identificado en el nivel anterior se documenta individual
 - **VGA y periféricos locales:** PLL, contadores H/V, generadores HSYNC/VSYNC, detector de región visible, cálculo de dirección de tile, memoria de tiles, generador de color, sincronizador y debouncer de botones, detector de flanco, controlador de displays, registro del LED, generador del buzzer.
 - **UART:** registro de control/estado, registro TX, registro RX, generador de baud, transmisor, receptor, lógica de detección/descarte de datos inválidos.
 
-![Diagrama de cuarto nivel del sistema](fig/diagrama_cuarto_nivel.png)
+### 7.1 Registros de transmisión y recepción del UART
+
+Los registros de transmisión y recepción constituyen la interfaz de
+almacenamiento entre el procesador y los bloques encargados de realizar
+la comunicación serial. El registro TX almacena temporalmente el dato
+que debe ser enviado por el transmisor UART, mientras que el registro RX
+mantiene el último dato recibido correctamente para que posteriormente
+pueda ser leído por el procesador.
+
+Ambos registros forman parte del periférico UART mapeado en memoria. El
+registro TX se encuentra asociado a la dirección `0x0001_0044`, mientras
+que el registro RX corresponde a la dirección `0x0001_0048`.
+
+#### Registro de transmisión (TX)
+
+El objetivo del registro TX es almacenar el dato escrito por el
+procesador antes de iniciar su transmisión serial. El dato proviene del
+bus `wdata_i[31:0]` y solamente debe almacenarse cuando se realiza una
+operación de escritura dirigida al registro de transmisión.
+
+La selección del registro se realiza mediante `addr_i[1:0]`. Dentro de
+la interfaz del UART se utiliza `addr_i = 01` para identificar el
+registro TX. Por lo tanto, la condición de carga puede expresarse como
+
+\[
+load_{TX} = write\_enable_i \land (addr_i = 01)
+\]
+
+Cuando `load_TX` está activo, el registro captura el dato presente en
+`wdata_i[31:0]`. El valor almacenado queda disponible para el bloque
+transmisor UART, encargado posteriormente de realizar la conversión del
+dato paralelo a la secuencia serial correspondiente.
+
+##### Entradas del registro TX
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del registro. |
+| `write_enable_i` | 1 bit | Entrada | Indica una operación de escritura sobre el periférico UART. |
+| `addr_i[1:0]` | 2 bits | Entrada | Selecciona el registro interno del UART. |
+| `wdata_i[31:0]` | 32 bits | Entrada | Dato proveniente del procesador que será almacenado para su transmisión. |
+
+##### Salidas del registro TX
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `tx_data` | Según implementación del UART | Salida | Dato almacenado que se entrega al transmisor UART. |
+
+#### Registro de recepción (RX)
+
+El registro RX realiza la función inversa al registro TX. Su objetivo es
+almacenar el dato reconstruido por el receptor UART después de completar
+correctamente una recepción.
+
+A diferencia del registro TX, el registro RX no es cargado directamente
+por una escritura del procesador. El dato proviene del receptor UART
+mediante `rx_data` y su almacenamiento se habilita mediante `rx_load`.
+Esta señal indica que la recepción ha terminado y que el dato recibido
+ha sido considerado válido.
+
+De forma conceptual, la operación del registro puede representarse como
+
+\[
+RX \leftarrow rx\_data
+\qquad \text{si } rx\_load = 1
+\]
+
+Una vez almacenado, el dato permanece disponible para que el procesador
+pueda consultarlo mediante una operación de lectura. Dentro del
+periférico UART se utiliza `addr_i = 10` para seleccionar el registro de
+recepción.
+
+##### Entradas del registro RX
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del registro. |
+| `rx_data` | Según implementación del UART | Entrada | Dato reconstruido por el receptor UART. |
+| `rx_load` | 1 bit | Entrada | Habilita el almacenamiento de un nuevo dato recibido correctamente. |
+
+##### Salidas del registro RX
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `rx_data_reg` | Según implementación del UART | Salida | Dato recibido y almacenado, disponible para su lectura. |
+
+#### Relación con los demás módulos
+
+Los registros TX y RX funcionan como elementos de enlace entre la
+interfaz MMIO del procesador y los bloques internos de comunicación del
+UART. El flujo de transmisión puede resumirse como
+
+`Procesador → wdata_i → Registro TX → UART TX → uart_tx`
+
+mientras que el flujo de recepción sigue el sentido contrario:
+
+`uart_rx → UART RX → Registro RX → interfaz de lectura → Procesador`.
+
+De esta forma, el procesador no necesita manipular directamente la
+secuencia serial. Su interacción con el UART se realiza mediante
+operaciones convencionales de lectura y escritura sobre registros
+mapeados en memoria.
+
+#### Comportamiento durante el reset
+
+Al activarse `rst_i`, los registros TX y RX deben regresar a un estado
+inicial conocido. De esta forma se evita que, después de un reinicio,
+el sistema interprete información almacenada previamente como un dato
+válido para transmitir o recibir.
+
+#### Casos especiales y condiciones de borde
+
+Una escritura dirigida a otro registro interno del UART no debe
+modificar el contenido del registro TX. De manera similar, el registro
+RX solamente debe actualizarse cuando `rx_load` indique que existe un
+nuevo dato válido. Una recepción descartada o inválida no debe
+sobrescribir el último dato válido almacenado.
+
+El control de cuándo un dato recibido puede cargarse en RX se desarrolla
+posteriormente mediante la lógica de detección y recuperación de datos.
+
+#### Estrategia de validación
+
+La validación del registro TX se realizará mediante simulación,
+comprobando que el dato presente en `wdata_i` solamente sea almacenado
+cuando coincidan una operación de escritura y la selección del registro
+TX. También se verificará que escrituras dirigidas a otros registros no
+modifiquen su contenido.
+
+Para el registro RX se comprobará que un nuevo valor de `rx_data`
+solamente sea almacenado cuando `rx_load` se encuentre activo. Además,
+se verificarán las condiciones de reinicio y que una recepción inválida
+no produzca la actualización del registro.
 
 ---
 
