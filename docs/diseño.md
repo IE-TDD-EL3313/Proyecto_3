@@ -1817,7 +1817,426 @@ modificaciones.
 Finalmente, se comprobará que después de una recepción descartada el
 receptor pueda regresar a su condición de reposo y procesar
 correctamente una nueva recepción.
+---
+### 7.7 PLL
 
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — PLL](fig/diagrama_cuarto_nivel_pll.jpeg)
+
+**Objetivo:** generar, a partir del reloj de entrada de 100 MHz, un reloj estable de 25 MHz
+para el dominio de video, indicando mediante `locked_o` cuándo la salida es válida.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj de referencia, 100 MHz. |
+| `rst_i` | 1 bit | Entrada | Reset del bloque. |
+| `clk_pix_o` | 1 bit | Salida | Reloj derivado, 25 MHz. |
+| `locked_o` | 1 bit | Salida | Indica que la salida ya es estable. |
+
+**Relación con los demás módulos:** alimenta al Generador de temporización VGA y, junto con
+el puerto A, a la Memoria de video.
+
+**Explicación de funcionamiento:** primitiva de FPGA (IP de PLL) que usa un lazo de enganche
+de fase para producir una salida sincronizada en frecuencia respecto a `clk_i`.
+
+**Diseño y justificación técnica:** se eligió una relación de división entera 4:1
+(100 MHz → 25 MHz) por ser la más simple posible, evitando fracciones que aumenten el
+*jitter*. Se descartó un divisor por lógica (`÷4` con contador) porque no viaja por la red de
+distribución de reloj dedicada de la FPGA, complicando el cierre de *timing*.
+
+**Ecuaciones:** `f_pix = f_clk / 4 = 25 MHz`.
+
+**Comportamiento durante el reset:** con `rst_i` activo, `locked_o = 0` y `clk_pix_o` no se
+considera válido.
+
+**Casos especiales y condiciones de borde:** tiempo de estabilización tras el reset (el
+sistema debe esperar `locked_o = 1` antes de iniciar el barrido de video); posible pérdida de
+enganche en operación.
+
+**Estrategia de validación:** medir en hardware la frecuencia real de `clk_pix_o` con
+osciloscopio/analizador lógico y verificar la activación de `locked_o` tras el reset.
+
+---
+
+### 7.8 Generador de temporización VGA
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Generador de temporización VGA](fig/diagrama_cuarto_nivel_temporizacion_vga.jpeg)
+
+**Objetivo:** generar toda la temporización 640×480@60Hz a partir del reloj de píxel: posición
+del haz, sincronismos y detección de región visible.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_pix_i` | 1 bit | Entrada | Reloj de píxel, 25 MHz. |
+| `rst_i` | 1 bit | Entrada | Reset del bloque. |
+| `hcount_o` | 10 bits | Salida | Posición horizontal del haz (0–799). |
+| `vcount_o` | 10 bits | Salida | Línea actual del cuadro (0–524). |
+| `hsync_o` | 1 bit | Salida | Sincronismo horizontal (polaridad negativa). |
+| `vsync_o` | 1 bit | Salida | Sincronismo vertical (polaridad negativa). |
+| `video_on_o` | 1 bit | Salida | 1 si el haz está en el área visible 640×480. |
+
+**Relación con los demás módulos:** recibe `clk_pix_o` del PLL; entrega `hcount_o`/`vcount_o`
+a la Memoria de video y `video_on_o` al Generador de color y RGB.
+
+**Explicación de funcionamiento:** internamente contiene un contador horizontal (0–799) que
+genera un pulso interno al completar cada línea; ese pulso habilita al contador vertical
+(0–524). Tres comparadores de rango derivan `hsync_o`, `vsync_o` y `video_on_o` a partir de
+ambos contadores.
+
+**Diseño y justificación técnica:** se fusionaron en un solo módulo los que originalmente
+serían 5 bloques (contador H, contador V, HSYNC, VSYNC, detector de región visible) porque
+ninguna señal intermedia tiene un consumidor fuera de este grupo.
+
+**Ecuaciones / tablas:**
+```
+if (hcount==799): hcount<=0; h_max<=1   else: hcount<=hcount+1
+if (h_max): if (vcount==524): vcount<=0  else: vcount<=vcount+1
+hsync_o = NOT(hcount>=656 AND hcount<752)
+vsync_o = NOT(vcount>=490 AND vcount<492)
+video_on_o = (hcount<640) AND (vcount<480)
+```
+
+| Región horizontal | Rango `hcount` | Región vertical | Rango `vcount` |
+|---|---|---|---|
+| Visible | 0–639 | Visible | 0–479 |
+| Front porch | 640–655 | Front porch | 480–489 |
+| Sync pulse | 656–751 | Sync pulse | 490–491 |
+| Back porch | 752–799 | Back porch | 492–524 |
+
+**Comportamiento durante el reset:** `hcount_o=0`, `vcount_o=0`, `video_on_o=1`,
+`hsync_o=vsync_o=1`.
+
+**Casos especiales y condiciones de borde:** el pulso interno de fin de línea debe durar
+exactamente un ciclo; verificar límites exactos de cada comparador; confirmar en hardware la
+polaridad de sincronismo esperada por el monitor.
+
+**Estrategia de validación:** simular un cuadro completo y verificar recorrido de
+`hcount_o`/`vcount_o`, ancho de los pulsos de sync, y coincidencia de `video_on_o` con el
+rectángulo 640×480.
+
+---
+
+### 7.9 Memoria de video
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Memoria de video](fig/diagrama_cuarto_nivel_memoria_video.jpeg)
+
+**Objetivo:** almacenar el contenido de las 300 casillas de la cuadrícula de video y resolver
+internamente la dirección de lectura a partir de la posición del haz.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada (puerto A) | Reloj del sistema, 100 MHz. |
+| `vga_we_i` | 1 bit | Entrada (puerto A) | Habilitación de escritura del CPU. |
+| `vga_addr_i` | 9 bits | Entrada (puerto A) | Dirección de tile a escribir. |
+| `vga_wdata_i` | 32 bits | Entrada (puerto A) | Palabra a escribir. |
+| `clk_pix_i` | 1 bit | Entrada (puerto B) | Reloj de píxel, 25 MHz. |
+| `hcount_i` | 10 bits | Entrada (puerto B) | Posición horizontal actual. |
+| `vcount_i` | 10 bits | Entrada (puerto B) | Línea actual del cuadro. |
+| `tile_data_o` | 32 bits | Salida (puerto B) | Palabra leída de la casilla correspondiente. |
+
+**Relación con los demás módulos:** el puerto A recibe señales del CPU vía MMIO; el puerto B
+recibe `hcount_o`/`vcount_o` del Generador de temporización y entrega `tile_data_o` al
+Generador de color y RGB.
+
+**Explicación de funcionamiento:** cada ciclo de `clk_pix_i` se calcula la dirección de tile
+correspondiente a la posición actual del haz y se usa para leer la memoria de doble puerto;
+en paralelo, el puerto A escribe de forma independiente cuando el CPU lo solicita.
+
+**Diseño y justificación técnica:** se fusionó el cálculo de dirección dentro de la memoria
+porque ese dato es de uso exclusivamente interno. Se usa la primitiva de BRAM de doble
+puerto y doble reloj de la FPGA (no un FIFO, dado que el acceso es aleatorio, no secuencial),
+que resuelve internamente el cruce de dominio de reloj. La división entre 32 (tamaño de
+tile) se resuelve tomando los bits superiores de `hcount`/`vcount` por ser 32 potencia de 2.
+
+**Ecuaciones:**
+```
+tile_col = hcount_i[9:5]
+tile_row = vcount_i[9:5]
+tile_addr = tile_row*20 + tile_col
+on posedge clk_i:     if (vga_we_i): mem[vga_addr_i] <= vga_wdata_i
+on posedge clk_pix_i: tile_data_o <= mem[tile_addr]
+```
+
+**Comportamiento durante el reset:** no se limpia por hardware (según el enunciado); la
+inicialización del contenido es responsabilidad del software.
+
+**Casos especiales y condiciones de borde:** direcciones fuera de rango durante *blanking*
+(se ignoran porque `video_on_o=0` fuerza negro aguas abajo); colisión de puerto en la misma
+dirección (no crítico, imperceptible a 60 Hz); latencia de lectura de un ciclo.
+
+**Estrategia de validación:** escribir un patrón conocido por el puerto A y verificar
+coincidencia al leer por el puerto B en toda la cuadrícula, incluyendo las esquinas.
+
+---
+
+### 7.10 Generador de color y RGB
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Generador de color y RGB](fig/diagrama_cuarto_nivel_color_rgb.jpeg)
+
+**Objetivo:** convertir la palabra leída de la memoria de video en los niveles físicos R/G/B,
+forzando negro durante el *blanking*.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `tile_data_i` | 32 bits | Entrada | Palabra leída de la memoria de video. |
+| `video_on_i` | 1 bit | Entrada | 1 si el haz está en el área visible. |
+| `r_o` | 4 bits | Salida | Componente roja. |
+| `g_o` | 4 bits | Salida | Componente verde. |
+| `b_o` | 4 bits | Salida | Componente azul. |
+
+**Relación con los demás módulos:** recibe `tile_data_o` de la Memoria de video y
+`video_on_o` del Generador de temporización; su salida va a la salida física del sistema.
+
+**Explicación de funcionamiento:** extrae `tile_data_i[2:0]` como código de color y lo
+traduce mediante una tabla fija a una combinación de (r,g,b); si `video_on_i=0`, fuerza
+(0,0,0).
+
+**Diseño y justificación técnica:** se fusionó la extracción de bits con la tabla de RGB
+porque no es una decisión de diseño independiente. Se usa una tabla de consulta (no una
+fórmula) por ser una paleta pequeña y fija.
+
+**Tabla de verdad (paleta a confirmar por el equipo):**
+
+| `tile_data_i[2:0]` | Significado | `r_o` | `g_o` | `b_o` |
+|---|---|---|---|---|
+| `000` | Agua | 0 | 4 | 15 |
+| `001` | Barco propio | 8 | 8 | 8 |
+| `010` | Impacto | 15 | 0 | 0 |
+| `011` | Fallo | 15 | 15 | 15 |
+| `1xx` | Reservado HUD | — | — | — |
+
+**Comportamiento durante el reset:** sin estado propio (combinacional); depende del contenido
+inicial (indefinido) de la memoria hasta que el software la inicialice.
+
+**Casos especiales y condiciones de borde:** `video_on_i=0` tiene prioridad absoluta sobre
+cualquier color.
+
+**Estrategia de validación:** simular los 8 valores posibles de `tile_data_i[2:0]` y verificar
+el color esperado; confirmar que fuera de `video_on_i` la salida siempre es negro.
+
+---
+
+### 7.11 Condicionador de entradas de botones
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Condicionador de entradas de botones](fig/diagrama_cuarto_nivel_condicionador_entradas.jpeg)
+
+**Objetivo:** convertir las 7 entradas físicas de botones en un registro confiable, libre de
+metaestabilidad y rebotes, legible por el CPU.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj del sistema, 100 MHz. |
+| `rst_i` | 1 bit | Entrada | Reset del módulo. |
+| `btn_raw_i` | 7 bits | Entrada | Arriba, abajo, izq, der, SEL, OK, RST sin filtrar. |
+| `addr_i` | 2 bits | Entrada | Selección de registro interno. |
+| `rdata_o` | 32 bits | Salida | Registro de estado (`0x0001_0120`). |
+
+**Relación con los demás módulos:** módulo hoja; expone su registro al bus de periféricos.
+
+**Explicación de funcionamiento:** cada línea pasa por sincronizador (2 flip-flops), filtro
+antirrebote (contador + comparador) y detector de flanco, generando pulsos de un ciclo que se
+cargan en el registro de estado.
+
+**Diseño y justificación técnica:** se fusionaron las 4 etapas porque ninguna señal
+intermedia tiene consumidor fuera de esta cadena. Se exponen pulsos de flanco (no nivel) para
+que la unidad de control reaccione una sola vez por pulsación.
+
+**Codificación del registro `btn_status` (`0x0001_0120`):**
+
+| Bit | Señal |
+|---|---|
+| `[0]` | `nav_up_pulse` |
+| `[1]` | `nav_down_pulse` |
+| `[2]` | `nav_left_pulse` |
+| `[3]` | `nav_right_pulse` |
+| `[4]` | `sel_pulse` |
+| `[5]` | `ok_pulse` |
+| `[6]` | `rst_pulse` |
+
+**Comportamiento durante el reset:** todos los registros internos se fuerzan a 0;
+`rdata_o = 0` inmediatamente tras el reset.
+
+**Casos especiales y condiciones de borde:** no confundir `rst_i` (reset de hardware) con
+`rst_pulse` (bit que indica que BTN_RST fue presionado, manejado por software); el pulso debe
+durar exactamente un ciclo.
+
+**Estrategia de validación:** simular rebotes y verificar que el filtro los descarta; simular
+pulsación sostenida y verificar un único pulso de flanco.
+
+---
+
+### 7.12 Controlador de displays de 7 segmentos
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Controlador de displays de 7 segmentos](fig/diagrama_cuarto_nivel_controlador_displays.jpeg)
+
+**Objetivo:** mostrar en 4 dígitos de 7 segmentos el contador acumulado de partidas ganadas de
+ambos jugadores (00–99 cada uno) mediante multiplexado.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj del sistema, 100 MHz. |
+| `rst_i` | 1 bit | Entrada | Reset del módulo. |
+| `wdata_i` | 32 bits | Entrada | 4 dígitos BCD (`0x0001_0130`). |
+| `we_i` | 1 bit | Entrada | Habilitación de escritura. |
+| `seg_o` | 7 bits | Salida | Patrón de segmentos activos. |
+| `anode_o` | 4 bits | Salida | Ánodo del dígito activo. |
+
+**Relación con los demás módulos:** módulo hoja; recibe datos del CPU vía bus de periféricos.
+
+**Explicación de funcionamiento:** un contador de refresco recorre los 4 dígitos, seleccionando
+en cada instante qué valor va a las líneas de segmento y qué ánodo se enciende, aprovechando
+persistencia de visión.
+
+**Diseño y justificación técnica:** se almacena el valor ya codificado en BCD para evitar un
+divisor/módulo por 10 en hardware. Se usa tabla de consulta para el decodificador de 7
+segmentos por no seguir un patrón aritmético simple.
+
+**Tabla de verdad del decodificador (`seg_o[gfedcba]`):**
+
+| Dígito | `seg_o` |
+|---|---|
+| 0 | `0111111` |
+| 1 | `0000110` |
+| 2 | `1011011` |
+| 3 | `1001111` |
+| 4 | `1100110` |
+| 5 | `1101101` |
+| 6 | `1111101` |
+| 7 | `0000111` |
+| 8 | `1111111` |
+| 9 | `1101111` |
+
+**Comportamiento durante el reset:** `wdata` almacenado se fuerza a 0 (displays en "00 00");
+el recorrido de refresco reinicia desde el dígito 0.
+
+**Casos especiales y condiciones de borde:** frecuencia de refresco suficiente para evitar
+parpadeo (>100 Hz recomendado); ánodo y valor de segmento deben cambiar en el mismo ciclo.
+
+**Estrategia de validación:** simular un valor conocido y verificar en forma de onda el orden
+de activación de ánodos con su segmento correspondiente; validar en hardware ausencia de
+parpadeo.
+
+---
+
+### 7.13 Registro del LED de estado
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Registro del LED de estado](fig/diagrama_cuarto_nivel_registro_led.jpeg)
+
+**Objetivo:** exponer hacia el LED físico el estado actual del sistema (colocación, batalla,
+resultado).
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj del sistema. |
+| `rst_i` | 1 bit | Entrada | Reset del módulo. |
+| `wdata_i` | 32 bits | Entrada | Solo se usan los bits `[2:0]` (`0x0001_0138`). |
+| `we_i` | 1 bit | Entrada | Habilitación de escritura. |
+| `led_o` | 3 bits | Salida | Señal física hacia el/los LED(s). |
+
+**Relación con los demás módulos:** módulo hoja; actualizado por el programa en ensamblador
+en cada cambio de fase.
+
+**Explicación de funcionamiento:** registro simple que captura `wdata_i[2:0]` cuando `we_i=1`
+y lo refleja directamente en `led_o`.
+
+**Diseño y justificación técnica:** no se fusiona con otros módulos por ser ya la unidad
+mínima posible.
+
+**Codificación propuesta:**
+
+| `led_o` | Significado |
+|---|---|
+| `001` | Fase de colocación |
+| `010` | Fase de batalla |
+| `100` | Resultado final |
+
+**Comportamiento durante el reset:** `led_o` se fuerza a `000` hasta que el software escriba
+el primer estado válido.
+
+**Casos especiales y condiciones de borde:** confirmar que el software siempre escribe un
+valor válido antes de que el estado sea observable.
+
+**Estrategia de validación:** simular la escritura de cada código válido y verificar `led_o`;
+validar en hardware el cambio visible en cada transición de fase.
+
+---
+
+### 7.14 Generador del buzzer
+
+**Diagrama modular:**
+
+![Diagrama de cuarto nivel — Generador del buzzer](fig/diagrama_cuarto_nivel_generador_buzzer.jpeg)
+
+**Objetivo:** generar la retroalimentación sonora del juego (impacto, fallo, hundido,
+colocación inválida, victoria) a partir de una sola escritura del CPU, con duración
+autocontenida.
+
+**Tabla de señales:**
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj del sistema. |
+| `rst_i` | 1 bit | Entrada | Reset del módulo. |
+| `wdata_i` | 32 bits | Entrada | `tone_sel[2:0]` + `buzz_start` (`0x0001_0140`). |
+| `we_i` | 1 bit | Entrada | Habilitación de escritura. |
+| `buzz_pwm_o` | 1 bit | Salida | Señal PWM hacia el buzzer físico. |
+
+**Relación con los demás módulos:** módulo hoja; recibe una orden puntual del CPU y genera la
+señal de audio de forma autónoma.
+
+**Explicación de funcionamiento:** el código de tono se traduce mediante tabla a un valor de
+división de frecuencia; el divisor genera pulsos a esa frecuencia; un contador de duración
+produce la señal PWM final durante un tiempo fijo y se detiene automáticamente.
+
+**Diseño y justificación técnica:** se fusionaron registro de control, selector de tono,
+divisor de frecuencia y contador de duración por ser subpasos de una sola función. El
+hardware controla la duración para no obligar al software a llevar temporización de audio.
+
+**Codificación propuesta del registro de control:**
+
+| `tone_sel` | Evento |
+|---|---|
+| `000` | Impacto |
+| `001` | Fallo |
+| `010` | Barco hundido |
+| `011` | Colocación inválida |
+| `100` | Victoria |
+
+**Comportamiento durante el reset:** contadores internos en 0, `buzz_pwm_o=0` (silencio).
+
+**Casos especiales y condiciones de borde:** definir si una nueva orden interrumpe el sonido
+en curso (recomendado: sí); duración fija por tono debe ser perceptible pero no bloqueante
+ante eventos consecutivos.
+
+**Estrategia de validación:** simular el disparo de cada tono y verificar frecuencia de
+`buzz_pwm_o` y apagado automático tras la duración esperada.
 
 ---
 
