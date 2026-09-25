@@ -169,9 +169,187 @@ y calcula `TargetPC` junto con `PCsrc`
 (`PCsrc = Jump | (Branch & BranchTaken)`). El `MUX Next PC` selecciona,
 según `PCsrc`, entre `PC_plus_4` y `TargetPC`, produciendo
 `NextPC[31:0]`, que regresa al `Registro PC`.
-
 ### 6.2 Memorias, interconexión MMIO y UART
-Bloques mínimos: ROM de instrucciones; RAM de datos; decodificador de direcciones; señales de selección para RAM y periféricos; generación de write enable por dispositivo; multiplexor de datos de lectura; registros de control/estado, TX y RX del UART; transmisor y receptor UART; generador de baud. Debe indicar `DataAddress`, `DataOut`, `DataIn`, `write_enable`, `uart_tx`, `uart_rx`.
+
+El subsistema de memorias, interconexión MMIO y comunicación UART
+permite conectar el procesador RISC-V con la memoria de programa, la
+memoria de datos y los diferentes periféricos del sistema. La
+arquitectura utiliza una interfaz independiente para la memoria de
+instrucciones y una interfaz compartida para el acceso a la RAM y a los
+periféricos mapeados en memoria.
+
+El procesador proporciona las señales `ProgAddress_o[31:0]` para el
+acceso a la memoria de programa y `DataAddress_o[31:0]`,
+`DataOut_o[31:0]` y `we_o` para las operaciones sobre memoria de datos
+y periféricos. Los datos obtenidos durante una operación de lectura
+regresan al procesador mediante `DataIn_i[31:0]`.
+
+#### Memoria ROM
+
+La memoria ROM almacena las instrucciones que ejecuta el procesador y
+utiliza una interfaz independiente del bus de datos. El procesador
+coloca la dirección de la instrucción requerida en
+`ProgAddress_o[31:0]` y la ROM retorna la instrucción correspondiente
+mediante `ProgIn_i[31:0]`.
+
+Debido a que la ROM pertenece al espacio de programa y dispone de su
+propia interfaz con el procesador, no participa en el multiplexor de
+lectura utilizado por la RAM y los periféricos MMIO. Cuando sea
+necesario, la dirección generada por el procesador se adapta a la
+organización interna de la memoria antes de realizar el acceso.
+
+#### Bus de datos e interconexión MMIO
+
+La RAM y los periféricos comparten la interfaz de datos del procesador.
+La dirección del acceso se presenta mediante `DataAddress_o[31:0]`,
+mientras que `DataOut_o[31:0]` constituye el bus común utilizado para
+transferir hacia los dispositivos el dato que debe escribirse.
+
+La señal `we_o` indica que el procesador está realizando una operación
+de escritura. Sin embargo, esta señal no se conecta directamente como
+habilitación de escritura de todos los dispositivos. Primero se combina
+con la señal de selección correspondiente al dispositivo direccionado,
+de manera que únicamente el bloque seleccionado pueda modificar su
+contenido.
+
+#### Decodificación de direcciones
+
+El decodificador de direcciones recibe `DataAddress_o[31:0]` y determina
+qué región del mapa de memoria está siendo accedida. Como resultado,
+genera señales de selección independientes para la RAM y para cada uno
+de los periféricos mapeados en memoria.
+
+Las principales señales de selección consideradas en la interconexión
+son:
+
+- `sel_RAM`
+- `sel_UART`
+- `sel_INPUT`
+- `sel_DISPLAY`
+- `sel_LED`
+- `sel_BUZZER`
+- `sel_VGA`
+
+Estas señales permiten que una misma interfaz de dirección y datos sea
+compartida por los diferentes dispositivos sin que más de un bloque
+responda simultáneamente al mismo acceso.
+
+#### Generación de habilitaciones de escritura
+
+Para cada dispositivo se genera una habilitación de escritura a partir
+de la señal global `we_o` y de la señal de selección obtenida mediante
+la decodificación de direcciones. De forma general, la habilitación de
+escritura de un dispositivo se expresa como
+
+\[
+we_x = we_o \land sel_x
+\]
+
+donde `sel_x` representa la señal de selección del dispositivo
+correspondiente.
+
+Por ejemplo, para la memoria RAM y el periférico UART se tiene
+
+\[
+we_{RAM} = we_o \land sel_{RAM}
+\]
+
+\[
+we_{UART} = we_o \land sel_{UART}
+\]
+
+Con este esquema, aunque `DataOut_o[31:0]` se distribuya hacia varios
+bloques, solamente el dispositivo seleccionado puede almacenar el dato
+durante una operación de escritura.
+
+#### Memoria RAM
+
+La memoria RAM se utiliza para almacenar los datos requeridos durante la
+ejecución del programa. El bloque recibe el dato de escritura desde
+`DataOut_o[31:0]`, una dirección interna derivada de
+`DataAddress_o[31:0]` y la habilitación `we_RAM`.
+
+Debido a que la RAM ocupa solamente una región del espacio total de
+direcciones, se utiliza una adaptación de dirección para convertir la
+dirección global generada por el procesador en una dirección válida
+dentro de la memoria. Para una memoria organizada en palabras de
+32 bits, esta adaptación puede representarse conceptualmente como
+
+\[
+RAM\_addr =
+\frac{DataAddress_o - BASE_{RAM}}{4}
+\]
+
+donde `BASE_RAM` corresponde a la dirección inicial de la región
+reservada para la RAM.
+
+Durante una operación de lectura, la RAM produce `ram_rdata[31:0]`, que
+se conecta como una de las entradas del multiplexor general de lectura.
+
+#### Adaptación de direcciones de los periféricos
+
+Los periféricos no requieren utilizar directamente los 32 bits de
+`DataAddress_o`. Una vez identificada la región correspondiente mediante
+el decodificador, la dirección puede reducirse o adaptarse al formato
+requerido por cada dispositivo.
+
+En los periféricos basados en registros, esta dirección interna permite
+seleccionar el registro particular que será leído o escrito. En el caso
+del UART, la dirección interna permite seleccionar entre sus registros
+de control/estado, transmisión y recepción. El periférico VGA utiliza
+una dirección interna de mayor tamaño debido a la cantidad de posiciones
+que componen su memoria de video.
+
+#### Multiplexor de lectura
+
+Cada dispositivo que permite operaciones de lectura genera su propia
+salida de datos. Entre estas señales se encuentran `ram_rdata`,
+`uart_rdata` y las salidas de lectura correspondientes a los demás
+periféricos.
+
+El multiplexor general de lectura utiliza las señales de selección
+generadas por el decodificador para determinar cuál de estos datos debe
+regresar al procesador. Su salida se conecta a `DataIn_i[31:0]`.
+
+De esta manera, durante una lectura se establece el siguiente recorrido
+general:
+
+`DataAddress_o` → decodificador → selección del dispositivo →
+dato de lectura → multiplexor → `DataIn_i`.
+
+Este mecanismo permite utilizar un único bus de retorno de 32 bits para
+la RAM y los diferentes periféricos MMIO.
+
+#### Integración del periférico UART
+
+El UART constituye uno de los periféricos conectados a la interconexión
+MMIO. Desde el punto de vista del procesador, se accede a sus registros
+mediante las mismas señales utilizadas para los demás dispositivos:
+`DataAddress_o[31:0]`, `DataOut_o[31:0]`, `DataIn_i[31:0]` y la
+habilitación de escritura correspondiente.
+
+Internamente, el periférico se divide en un registro de control y estado,
+un registro de transmisión, un registro de recepción, un transmisor
+UART, un receptor UART y un generador de baud. La selección interna de
+los registros permite determinar qué información debe escribirse o
+retornarse durante cada acceso realizado por el procesador.
+
+El registro de transmisión almacena la información que posteriormente
+será serializada por el transmisor UART. En sentido contrario, el
+receptor UART reconstruye la información recibida serialmente y permite
+almacenarla en el registro de recepción. El registro de control y estado
+proporciona la información necesaria para coordinar las operaciones de
+transmisión y recepción.
+
+El generador de baud obtiene, a partir del reloj principal del sistema,
+la referencia temporal utilizada por los bloques de transmisión y
+recepción. Finalmente, las señales físicas `uart_tx` y `uart_rx`
+permiten establecer la comunicación serial entre el sistema implementado
+en la FPGA y la aplicación ejecutada en la computadora.
+
+El funcionamiento interno de los registros, el generador de baud, el
+transmisor, el receptor y las máquinas de estado asociadas se desarrolla
+con mayor detalle en los diagramas de cuarto nivel.
 
 ### 6.3 Periférico VGA y sistema de relojes
 Bloques mínimos: PLL / generador del reloj de píxel; contadores horizontal y vertical; generadores de HSYNC/VSYNC; detector de región visible; cálculo de fila/columna del tile; memoria de tiles de doble puerto; generador de color; interfaz de escritura desde el procesador. Debe diferenciar el dominio de 100 MHz (procesador) del dominio de 25 MHz (VGA).
