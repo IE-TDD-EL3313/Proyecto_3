@@ -179,7 +179,9 @@ Bloques mínimos: PLL / generador del reloj de píxel; contadores horizontal y v
 ### 6.4 Periféricos locales
 Bloques mínimos: sincronizadores de entradas; debouncing; detectores de flanco; registro de estado de botones; registro de datos de displays; selector de dígito; decodificador de 7 segmentos; registro del LED; registro de control del buzzer; selector de tono; divisor de frecuencia; contador de duración del sonido.
 
-![Diagrama de tercer nivel del sistema](fig/diagrama_tercer_nivel.png)
+![Diagrama de tercer nivel del sistema1](fig/diagrama_tercer_nivel1.jpeg)
+
+![Diagrama de tercer nivel del sistema2](fig/diagrama_tercer_nivel2.jpeg)
 
 ---
 
