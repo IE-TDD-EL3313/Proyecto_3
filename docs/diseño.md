@@ -416,11 +416,11 @@ operación de escritura dirigida al registro de transmisión.
 
 La selección del registro se realiza mediante `addr_i[1:0]`. Dentro de
 la interfaz del UART se utiliza `addr_i = 01` para identificar el
-registro TX. Por lo tanto, la condición de carga puede expresarse como
+registro TX. Por lo tanto, la condición de carga puede expresarse como:
 
-\[
+$$
 load_{TX} = write\_enable_i \land (addr_i = 01)
-\]
+$$
 
 Cuando `load_TX` está activo, el registro captura el dato presente en
 `wdata_i[31:0]`. El valor almacenado queda disponible para el bloque
@@ -445,9 +445,9 @@ dato paralelo a la secuencia serial correspondiente.
 
 #### Registro de recepción (RX)
 
-El registro RX realiza la función inversa al registro TX. Su objetivo es
-almacenar el dato reconstruido por el receptor UART después de completar
-correctamente una recepción.
+El registro RX realiza la función complementaria al registro TX. Su
+objetivo es almacenar el dato reconstruido por el receptor UART después
+de completar correctamente una recepción.
 
 A diferencia del registro TX, el registro RX no es cargado directamente
 por una escritura del procesador. El dato proviene del receptor UART
@@ -455,12 +455,14 @@ mediante `rx_data` y su almacenamiento se habilita mediante `rx_load`.
 Esta señal indica que la recepción ha terminado y que el dato recibido
 ha sido considerado válido.
 
-De forma conceptual, la operación del registro puede representarse como
+De forma conceptual, la operación de carga del registro puede
+representarse como:
 
-\[
+$$
 RX \leftarrow rx\_data
-\qquad \text{si } rx\_load = 1
-\]
+\qquad \text{si} \qquad
+rx\_load = 1
+$$
 
 Una vez almacenado, el dato permanece disponible para que el procesador
 pueda consultarlo mediante una operación de lectura. Dentro del
@@ -482,54 +484,143 @@ recepción.
 |---|---:|---|---|
 | `rx_data_reg` | Según implementación del UART | Salida | Dato recibido y almacenado, disponible para su lectura. |
 
+![Diagrama de cuarto nivel de los registros TX y RX del UART.](fig/registros_uart.png)
+
 #### Relación con los demás módulos
 
 Los registros TX y RX funcionan como elementos de enlace entre la
 interfaz MMIO del procesador y los bloques internos de comunicación del
-UART. El flujo de transmisión puede resumirse como
+UART.
 
-`Procesador → wdata_i → Registro TX → UART TX → uart_tx`
+Durante una transmisión, el flujo de información es:
 
-mientras que el flujo de recepción sigue el sentido contrario:
+**Procesador → `wdata_i` → Registro TX → UART TX → `uart_tx`**
 
-`uart_rx → UART RX → Registro RX → interfaz de lectura → Procesador`.
+El procesador escribe el dato en el registro TX y posteriormente el
+transmisor UART se encarga de convertirlo en una secuencia serial que
+sale físicamente mediante `uart_tx`.
 
-De esta forma, el procesador no necesita manipular directamente la
-secuencia serial. Su interacción con el UART se realiza mediante
-operaciones convencionales de lectura y escritura sobre registros
-mapeados en memoria.
+Durante una recepción, el flujo ocurre en sentido contrario:
+
+**`uart_rx` → UART RX → Registro RX → interfaz de lectura → Procesador**
+
+El receptor UART reconstruye el dato recibido serialmente. Cuando la
+recepción finaliza correctamente, `rx_load` permite almacenar el dato en
+el registro RX para que pueda ser leído posteriormente por el
+procesador.
+
+De esta manera, el procesador no necesita manipular directamente la
+temporización de la comunicación serial, sino que interactúa con el
+UART mediante operaciones convencionales de lectura y escritura sobre
+registros mapeados en memoria.
+
+#### Funcionamiento
+
+El registro TX se actualiza únicamente cuando se realiza una operación
+de escritura sobre su dirección interna. Su comportamiento puede
+representarse como:
+
+$$
+TX_{next} =
+\begin{cases}
+wdata_i, & \text{si } load_{TX}=1 \\
+TX, & \text{si } load_{TX}=0
+\end{cases}
+$$
+
+Por su parte, el registro RX se actualiza únicamente cuando la lógica de
+recepción indica que existe un nuevo dato válido:
+
+$$
+RX_{next} =
+\begin{cases}
+rx\_data, & \text{si } rx\_load=1 \\
+RX, & \text{si } rx\_load=0
+\end{cases}
+$$
+
+Esto permite que ambos registros mantengan su contenido mientras no se
+presente una nueva operación válida de carga.
+
+#### Diseño y justificación técnica
+
+La utilización de registros independientes para transmisión y recepción
+permite desacoplar el funcionamiento del procesador de la temporización
+propia de la comunicación UART. El procesador trabaja con transferencias
+paralelas mediante la interfaz MMIO, mientras que los bloques UART TX y
+UART RX se encargan de realizar las conversiones entre representación
+paralela y serial.
+
+La separación entre TX y RX también permite que cada camino de
+comunicación mantenga su propio dato sin que una operación de recepción
+modifique la información almacenada para transmisión, o viceversa.
+
+La selección mediante `addr_i[1:0]` permite además utilizar una única
+interfaz MMIO para acceder a los diferentes registros internos del
+periférico UART.
 
 #### Comportamiento durante el reset
 
-Al activarse `rst_i`, los registros TX y RX deben regresar a un estado
-inicial conocido. De esta forma se evita que, después de un reinicio,
-el sistema interprete información almacenada previamente como un dato
-válido para transmitir o recibir.
+Cuando `rst_i` se encuentra activo, los registros TX y RX regresan a un
+estado inicial conocido. Conceptualmente, su comportamiento durante el
+reinicio puede expresarse como:
+
+$$
+rst_i = 1
+\quad \Rightarrow \quad
+TX = 0,\qquad RX = 0
+$$
+
+Esto evita que después de un reinicio el sistema interprete información
+residual almacenada previamente como un dato válido de transmisión o
+recepción.
 
 #### Casos especiales y condiciones de borde
 
 Una escritura dirigida a otro registro interno del UART no debe
-modificar el contenido del registro TX. De manera similar, el registro
-RX solamente debe actualizarse cuando `rx_load` indique que existe un
-nuevo dato válido. Una recepción descartada o inválida no debe
-sobrescribir el último dato válido almacenado.
+modificar el contenido del registro TX. Por lo tanto, aunque
+`write_enable_i` esté activo, el registro conserva su contenido si
+`addr_i` no corresponde al registro de transmisión.
 
-El control de cuándo un dato recibido puede cargarse en RX se desarrolla
-posteriormente mediante la lógica de detección y recuperación de datos.
+De igual forma, el registro RX solamente debe actualizarse cuando
+`rx_load` indique la existencia de un nuevo dato válido. Si se detecta
+una recepción inválida, el dato no debe cargarse en el registro RX y el
+último valor válido almacenado debe conservarse.
+
+Estas condiciones pueden resumirse mediante:
+
+$$
+load_{TX}=0
+\quad \Rightarrow \quad
+TX_{next}=TX
+$$
+
+$$
+rx\_load=0
+\quad \Rightarrow \quad
+RX_{next}=RX
+$$
+
+La generación de `rx_load` y el tratamiento de una recepción inválida
+se desarrollan posteriormente en la lógica de detección y recuperación
+del receptor UART.
 
 #### Estrategia de validación
 
 La validación del registro TX se realizará mediante simulación,
-comprobando que el dato presente en `wdata_i` solamente sea almacenado
-cuando coincidan una operación de escritura y la selección del registro
-TX. También se verificará que escrituras dirigidas a otros registros no
-modifiquen su contenido.
+aplicando diferentes valores sobre `wdata_i[31:0]` y verificando que el
+registro solamente se actualice cuando `write_enable_i = 1` y
+`addr_i = 01`. También se comprobará que las escrituras dirigidas a
+otros registros internos del UART no modifiquen su contenido.
 
-Para el registro RX se comprobará que un nuevo valor de `rx_data`
-solamente sea almacenado cuando `rx_load` se encuentre activo. Además,
-se verificarán las condiciones de reinicio y que una recepción inválida
-no produzca la actualización del registro.
+Para el registro RX se aplicarán diferentes valores de `rx_data` y se
+verificará que solamente sean almacenados cuando `rx_load = 1`. Cuando
+`rx_load = 0`, el registro deberá conservar el último dato almacenado.
 
+Finalmente, se verificará el comportamiento de ambos registros durante
+`rst_i`, comprobando que regresen al estado inicial definido y que
+posteriormente puedan realizar nuevas operaciones de carga de manera
+correcta.
 ---
 
 ## 8. Mapa de memoria, registros y organización de datos
