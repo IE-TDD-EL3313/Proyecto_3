@@ -82,7 +82,7 @@ El diagrama de primer nivel representa el sistema completo de la FPGA como un ú
 
 El sistema recibe las interacciones físicas locales y remotas, procesa las acciones del juego de manera autónoma mediante el código ensamblador, y actualiza en tiempo real las pantallas y los indicadores de estado. En este nivel no se especifica cómo se realizan internamente estas funciones.
 
-![Diagrama de primer nivel del sistema]fig/diagrama_primer_nivel.png
+![Diagrama de primer nivel del sistema](fig/diagrama_primer_nivel.png)
 
 ---
 
@@ -90,7 +90,7 @@ El sistema recibe las interacciones físicas locales y remotas, procesa las acci
 
 El segundo nivel divide el sistema completo en sus bloques funcionales principales: núcleo RISC-V, ROM, RAM, decodificación MMIO, UART, VGA, entradas del Jugador 1, displays/LED/buzzer, y la aplicación de PC como bloque externo conectado por UART.
 
-![Diagrama de segundo nivel del sistema]fig/diagrama_segundo_nivel.jpg
+![Diagrama de segundo nivel del sistema](fig/diagrama_segundo_nivel.jpg)
 
 ---
 
@@ -179,7 +179,7 @@ Bloques mínimos: PLL / generador del reloj de píxel; contadores horizontal y v
 ### 6.4 Periféricos locales
 Bloques mínimos: sincronizadores de entradas; debouncing; detectores de flanco; registro de estado de botones; registro de datos de displays; selector de dígito; decodificador de 7 segmentos; registro del LED; registro de control del buzzer; selector de tono; divisor de frecuencia; contador de duración del sonido.
 
-![Diagrama de tercer nivel del sistema]fig/diagrama_tercer_nivel.png
+![Diagrama de tercer nivel del sistema](fig/diagrama_tercer_nivel.png)
 
 ---
 
@@ -214,7 +214,7 @@ Cada módulo funcional identificado en el nivel anterior se documenta individual
 - **VGA y periféricos locales:** PLL, contadores H/V, generadores HSYNC/VSYNC, detector de región visible, cálculo de dirección de tile, memoria de tiles, generador de color, sincronizador y debouncer de botones, detector de flanco, controlador de displays, registro del LED, generador del buzzer.
 - **UART:** registro de control/estado, registro TX, registro RX, generador de baud, transmisor, receptor, lógica de detección/descarte de datos inválidos.
 
-![Diagrama de cuarto nivel del sistema]fig/diagrama_cuarto_nivel.png
+![Diagrama de cuarto nivel del sistema](fig/diagrama_cuarto_nivel.png)
 
 ---
 
