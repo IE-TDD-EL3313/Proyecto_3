@@ -616,11 +616,6 @@ otros registros internos del UART no modifiquen su contenido.
 Para el registro RX se aplicarán diferentes valores de `rx_data` y se
 verificará que solamente sean almacenados cuando `rx_load = 1`. Cuando
 `rx_load = 0`, el registro deberá conservar el último dato almacenado.
-
-Finalmente, se verificará el comportamiento de ambos registros durante
-`rst_i`, comprobando que regresen al estado inicial definido y que
-posteriormente puedan realizar nuevas operaciones de carga de manera
-correcta.
 ---
 
 ## 8. Mapa de memoria, registros y organización de datos
