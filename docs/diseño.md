@@ -82,7 +82,7 @@ El diagrama de primer nivel representa el sistema completo de la FPGA como un ú
 
 El sistema recibe las interacciones físicas locales y remotas, procesa las acciones del juego de manera autónoma mediante el código ensamblador, y actualiza en tiempo real las pantallas y los indicadores de estado. En este nivel no se especifica cómo se realizan internamente estas funciones.
 
-![Diagrama de primer nivel del sistema](fig/diagrama_primer_nivel.png)
+![Diagrama de primer nivel del sistema](fig/diagrama_primer_nivel.jpg)
 
 ---
 
