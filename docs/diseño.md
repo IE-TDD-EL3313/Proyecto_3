@@ -791,6 +791,187 @@ variarán las señales provenientes de los bloques TX y RX para verificar
 que la palabra de estado refleje correctamente los cambios producidos
 por estos módulos.
 
+### 7.3 Generador de baud
+
+El generador de baud proporciona la referencia temporal utilizada por
+los bloques de transmisión y recepción del UART. Su función consiste en
+obtener, a partir del reloj principal del sistema, una señal periódica
+denominada `baud_tick`, que permite sincronizar las operaciones internas
+asociadas con la comunicación serial.
+
+El sistema utiliza un reloj principal de 100 MHz, mientras que la
+comunicación UART debe operar a una velocidad de 115200 baudios. Debido
+a esta diferencia de frecuencias, es necesario incorporar un bloque que
+genere la temporización requerida por el periférico UART.
+
+#### Objetivo
+
+El objetivo del generador de baud es producir una señal de habilitación
+temporal a partir de `clk_i`. Esta señal permite que las máquinas de
+estado de transmisión y recepción avancen de acuerdo con la
+temporización definida para la comunicación UART.
+
+El bloque se implementa conceptualmente mediante un contador y una
+lógica de comparación. El contador incrementa con el reloj principal y,
+al alcanzar el valor establecido, se genera `baud_tick` y se reinicia
+el conteo.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema de 100 MHz. |
+| `rst_i` | 1 bit | Entrada | Reinicio del generador de baud. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `baud_tick` | 1 bit | Salida | Pulso periódico utilizado como referencia temporal por los bloques UART TX y UART RX. |
+
+![Diagrama de cuarto nivel del generador de baud.](fig/generador_baud.jpg)
+
+#### Relación con los demás módulos
+
+El generador de baud recibe directamente el reloj principal del sistema
+y proporciona `baud_tick` a los bloques de transmisión y recepción.
+
+El flujo de la señal puede representarse como:
+
+**`clk_i` → Generador de baud → `baud_tick` → UART TX / UART RX**
+
+De esta manera, los bloques UART TX y UART RX permanecen sincronizados
+con una referencia temporal derivada del mismo reloj del sistema.
+
+#### Funcionamiento
+
+Internamente, el generador está compuesto por un contador y una lógica
+de comparación. El contador incrementa su valor con cada ciclo de
+`clk_i`.
+
+De forma conceptual, mientras no se alcance el valor terminal:
+
+$$
+contador_{next} = contador + 1
+$$
+
+Cuando el contador alcanza el valor definido para generar la referencia
+temporal, se produce un pulso en `baud_tick` y el contador comienza
+nuevamente el conteo.
+
+El comportamiento puede representarse como:
+
+$$
+baud\_tick =
+\begin{cases}
+1, & \text{si } contador = N-1 \\
+0, & \text{en otro caso}
+\end{cases}
+$$
+
+y la actualización del contador como:
+
+$$
+contador_{next} =
+\begin{cases}
+0, & \text{si } contador = N-1 \\
+contador + 1, & \text{en otro caso}
+\end{cases}
+$$
+
+donde $N$ representa el número de ciclos del reloj principal utilizados
+para generar la referencia temporal requerida por el UART.
+
+La relación general entre la frecuencia del reloj, la frecuencia de la
+referencia generada y el valor de división puede expresarse como:
+
+$$
+N = \frac{f_{clk}}{f_{tick}}
+$$
+
+Para el sistema diseñado:
+
+$$
+f_{clk}=100\text{ MHz}
+$$
+
+mientras que la comunicación UART opera a:
+
+$$
+baud=115200\text{ baudios}
+$$
+
+El valor definitivo de $f_{tick}$ y, por lo tanto, de $N$, depende de la
+estrategia de temporización utilizada por la implementación del UART.
+
+#### Diseño y justificación técnica
+
+Se utiliza un contador síncrono porque permite derivar la referencia
+temporal del UART directamente del reloj principal sin introducir un
+reloj externo adicional. `baud_tick` se utiliza como una señal de
+habilitación periódica, mientras que la lógica secuencial de los bloques
+UART continúa sincronizada con `clk_i`.
+
+Esta estructura mantiene todos los bloques principales dentro del mismo
+dominio de reloj y permite centralizar la generación de la referencia
+temporal utilizada por el transmisor y el receptor.
+
+La separación del generador de baud como módulo independiente también
+facilita su validación y permite modificar la velocidad de comunicación
+sin alterar directamente la estructura de las máquinas de estado del
+transmisor y del receptor.
+
+#### Comportamiento durante el reset
+
+Cuando `rst_i` se encuentra activo, el contador interno regresa a su
+valor inicial y `baud_tick` permanece inactivo.
+
+Conceptualmente:
+
+$$
+rst_i=1
+\quad\Rightarrow\quad
+contador=0
+$$
+
+$$
+rst_i=1
+\quad\Rightarrow\quad
+baud\_tick=0
+$$
+
+Al retirar el reset, el contador comienza nuevamente a incrementar a
+partir de cero hasta alcanzar el valor terminal correspondiente.
+
+#### Casos especiales y condiciones de borde
+
+El contador debe reiniciarse inmediatamente después de alcanzar su valor
+terminal para evitar la generación de pulsos adicionales o intervalos
+incorrectos entre pulsos consecutivos.
+
+Además, `baud_tick` debe permanecer activo únicamente durante el
+intervalo definido por el diseño, evitando que una misma condición de
+conteo provoque múltiples avances en las máquinas de estado UART.
+
+El valor utilizado como límite del contador deberá establecerse de
+acuerdo con la temporización finalmente utilizada por los bloques UART
+TX y UART RX.
+
+#### Estrategia de validación
+
+La validación del generador de baud se realizará inicialmente mediante
+simulación. Se verificará que, después de retirar `rst_i`, el contador
+avance correctamente y que `baud_tick` sea generado únicamente al
+alcanzar el valor terminal establecido.
+
+También se medirá el número de ciclos de `clk_i` existentes entre dos
+pulsos consecutivos de `baud_tick`, comprobando que corresponda con el
+valor de división definido.
+
+Finalmente, durante la integración con los bloques UART TX y UART RX se
+verificará que la referencia temporal generada permita realizar
+correctamente la transmisión y recepción a la velocidad de comunicación
+establecida de 115200 baudios.
 
 
 ---
