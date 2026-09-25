@@ -616,6 +616,183 @@ otros registros internos del UART no modifiquen su contenido.
 Para el registro RX se aplicarán diferentes valores de `rx_data` y se
 verificará que solamente sean almacenados cuando `rx_load = 1`. Cuando
 `rx_load = 0`, el registro deberá conservar el último dato almacenado.
+
+### 7.2 Registro de control y estado del UART
+
+El registro de control y estado permite al procesador supervisar y
+coordinar el funcionamiento del periférico UART. Este registro concentra
+la información necesaria para conocer el estado de los bloques de
+transmisión y recepción y permite establecer las señales de control
+requeridas por el periférico.
+
+Dentro del mapa de memoria, el registro de control y estado del UART se
+encuentra asociado a la dirección `0x0001_0040`. A nivel interno del
+periférico se selecciona mediante `addr_i = 00`.
+
+#### Objetivo
+
+El objetivo de este módulo es proporcionar una interfaz entre el
+procesador y las señales de control y estado generadas por los bloques
+UART TX y UART RX. De esta forma, el procesador puede consultar el estado
+del periférico antes de realizar operaciones de transmisión o recepción.
+
+La condición de selección del registro puede representarse como:
+
+$$
+sel_{CTRL} = (addr_i = 00)
+$$
+
+En caso de requerirse una escritura sobre los campos de control del
+registro, la habilitación correspondiente se obtiene mediante:
+
+$$
+write_{CTRL} =
+write\_enable_i \land (addr_i = 00)
+$$
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del módulo. |
+| `write_enable_i` | 1 bit | Entrada | Indica una operación de escritura sobre el periférico UART. |
+| `addr_i[1:0]` | 2 bits | Entrada | Selecciona el registro interno del UART. |
+| `wdata_i[31:0]` | 32 bits | Entrada | Datos de control provenientes del procesador. |
+| `estado_TX` | Según implementación | Entrada | Información de estado proveniente del transmisor UART. |
+| `estado_RX` | Según implementación | Entrada | Información de estado proveniente del receptor UART. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `rdata_status[31:0]` | 32 bits | Salida | Palabra que contiene la información de control y estado disponible para lectura por el procesador. |
+
+![Diagrama de cuarto nivel del registro de control y estado del UART.](fig/control_estado_uart.jpg)
+
+#### Relación con los demás módulos
+
+El registro de control y estado se encuentra conectado con los bloques
+de transmisión y recepción del UART. Estos bloques proporcionan las
+señales que representan su condición de operación y permiten informar al
+procesador sobre el estado actual de la comunicación.
+
+El flujo de información de estado puede representarse como:
+
+**UART TX / UART RX → Registro de control y estado → MUX de lectura UART → Procesador**
+
+Para las operaciones de control realizadas por software, el flujo ocurre
+en sentido contrario:
+
+**Procesador → `wdata_i` → Registro de control y estado → lógica interna del UART**
+
+De esta forma, el registro constituye el punto de comunicación entre el
+software ejecutado por el procesador y el estado interno del periférico
+UART.
+
+#### Funcionamiento
+
+Cuando el procesador realiza una lectura de la dirección correspondiente
+al registro de control y estado, la información contenida en
+`rdata_status[31:0]` se entrega al multiplexor interno de lectura del
+UART. Posteriormente, esta información puede regresar al procesador por
+medio de la interfaz MMIO.
+
+La selección del dato de estado durante una lectura se produce cuando:
+
+$$
+addr_i = 00
+$$
+
+Si existen campos de control modificables por software, estos solamente
+pueden actualizarse cuando se cumple:
+
+$$
+write\_enable_i = 1
+\qquad \text{y} \qquad
+addr_i = 00
+$$
+
+por lo que:
+
+$$
+write_{CTRL} =
+write\_enable_i \land (addr_i = 00)
+$$
+
+Las señales de estado provenientes del transmisor y del receptor se
+utilizan para formar la palabra de estado disponible para el procesador.
+
+#### Diseño y justificación técnica
+
+La utilización de un registro de control y estado permite concentrar en
+una única posición del espacio de memoria la información necesaria para
+coordinar el UART. Esto simplifica la interacción del software con el
+hardware, ya que el procesador puede consultar el estado del periférico
+mediante una operación convencional de lectura MMIO.
+
+La separación entre este registro y los registros TX y RX permite que
+los datos transmitidos o recibidos permanezcan independientes de las
+señales utilizadas para controlar y supervisar la comunicación.
+
+La interfaz de 32 bits mantiene además compatibilidad con la interfaz
+estándar utilizada por los periféricos del sistema.
+
+#### Comportamiento durante el reset
+
+Cuando `rst_i` se encuentra activo, los campos de control almacenados
+por el módulo deben regresar a su estado inicial. Las señales de estado
+deben representar la condición inicial de los bloques TX y RX después
+del reinicio.
+
+De forma conceptual:
+
+$$
+rst_i = 1
+\quad \Rightarrow \quad
+Control = Control_{inicial}
+$$
+
+Una vez retirado el reset, el registro vuelve a responder a las
+operaciones de lectura y escritura realizadas por el procesador.
+
+#### Casos especiales y condiciones de borde
+
+Una escritura realizada sobre los registros TX o RX no debe modificar
+los campos de control almacenados en este módulo. Por lo tanto, el
+registro únicamente acepta una operación de escritura cuando
+`addr_i = 00`.
+
+De forma equivalente:
+
+$$
+addr_i \neq 00
+\quad \Rightarrow \quad
+write_{CTRL}=0
+$$
+
+Las señales de estado deben reflejar únicamente las condiciones
+proporcionadas por los bloques de transmisión y recepción. Un dato
+recibido de forma inválida no debe presentarse al procesador como una
+recepción válida.
+
+#### Estrategia de validación
+
+La validación del módulo se realizará mediante simulación. Primero se
+comprobará que una lectura con `addr_i = 00` produzca en
+`rdata_status[31:0]` la información correspondiente al estado del UART.
+
+También se realizarán operaciones de escritura sobre diferentes valores
+de `addr_i`, verificando que los campos de control solamente puedan
+modificarse cuando `write_enable_i = 1` y `addr_i = 00`.
+
+Finalmente, se comprobará el comportamiento durante `rst_i` y se
+variarán las señales provenientes de los bloques TX y RX para verificar
+que la palabra de estado refleje correctamente los cambios producidos
+por estos módulos.
+
+
+
 ---
 
 ## 8. Mapa de memoria, registros y organización de datos
