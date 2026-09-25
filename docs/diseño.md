@@ -484,7 +484,7 @@ recepción.
 |---|---:|---|---|
 | `rx_data_reg` | Según implementación del UART | Salida | Dato recibido y almacenado, disponible para su lectura. |
 
-![Diagrama de cuarto nivel de los registros TX y RX del UART.](fig/registros_uart.png)
+![Diagrama de cuarto nivel de los registros TX y RX del UART.](fig/registros_uart.jpg)
 
 #### Relación con los demás módulos
 
