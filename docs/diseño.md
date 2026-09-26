@@ -1822,7 +1822,7 @@ correctamente una nueva recepción.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — PLL](fig/diagrama_cuarto_nivel_pll.jpeg)
+![Diagrama de cuarto nivel — PLL](fig/diagrama_cuarto_nivel_pll.png)
 
 **Objetivo:** generar, a partir del reloj de entrada de 100 MHz, un reloj estable de 25 MHz
 para el dominio de video, indicando mediante `locked_o` cuándo la salida es válida.
@@ -1865,7 +1865,7 @@ osciloscopio/analizador lógico y verificar la activación de `locked_o` tras el
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador de temporización VGA](fig/diagrama_cuarto_nivel_temporizacion_vga.jpeg)
+![Diagrama de cuarto nivel — Generador de temporización VGA](fig/diagrama_cuarto_nivel_temporizacion_vga.png)
 
 **Objetivo:** generar toda la temporización 640×480@60Hz a partir del reloj de píxel: posición
 del haz, sincronismos y detección de región visible.
@@ -1927,7 +1927,7 @@ rectángulo 640×480.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Memoria de video](fig/diagrama_cuarto_nivel_memoria_video.jpeg)
+![Diagrama de cuarto nivel — Memoria de video](fig/diagrama_cuarto_nivel_memoria_video.png)
 
 **Objetivo:** almacenar el contenido de las 300 casillas de la cuadrícula de video y resolver
 internamente la dirección de lectura a partir de la posición del haz.
@@ -1984,7 +1984,7 @@ coincidencia al leer por el puerto B en toda la cuadrícula, incluyendo las esqu
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador de color y RGB](fig/diagrama_cuarto_nivel_color_rgb.jpeg)
+![Diagrama de cuarto nivel — Generador de color y RGB](fig/diagrama_cuarto_nivel_color_rgb.png)
 
 **Objetivo:** convertir la palabra leída de la memoria de video en los niveles físicos R/G/B,
 forzando negro durante el *blanking*.
@@ -2035,7 +2035,7 @@ el color esperado; confirmar que fuera de `video_on_i` la salida siempre es negr
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Condicionador de entradas de botones](fig/diagrama_cuarto_nivel_condicionador_entradas.jpeg)
+![Diagrama de cuarto nivel — Condicionador de entradas de botones](fig/diagrama_cuarto_nivel_condicionador_entradas.png)
 
 **Objetivo:** convertir las 7 entradas físicas de botones en un registro confiable, libre de
 metaestabilidad y rebotes, legible por el CPU.
@@ -2088,7 +2088,7 @@ pulsación sostenida y verificar un único pulso de flanco.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Controlador de displays de 7 segmentos](fig/diagrama_cuarto_nivel_controlador_displays.jpeg)
+![Diagrama de cuarto nivel — Controlador de displays de 7 segmentos](fig/diagrama_cuarto_nivel_controlador_displays.png)
 
 **Objetivo:** mostrar en 4 dígitos de 7 segmentos el contador acumulado de partidas ganadas de
 ambos jugadores (00–99 cada uno) mediante multiplexado.
@@ -2145,7 +2145,7 @@ parpadeo.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Registro del LED de estado](fig/diagrama_cuarto_nivel_registro_led.jpeg)
+![Diagrama de cuarto nivel — Registro del LED de estado](fig/diagrama_cuarto_nivel_registro_led.png)
 
 **Objetivo:** exponer hacia el LED físico el estado actual del sistema (colocación, batalla,
 resultado).
@@ -2192,7 +2192,7 @@ validar en hardware el cambio visible en cada transición de fase.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador del buzzer](fig/diagrama_cuarto_nivel_generador_buzzer.jpeg)
+![Diagrama de cuarto nivel — Generador del buzzer](fig/diagrama_cuarto_nivel_generador_buzzer.png)
 
 **Objetivo:** generar la retroalimentación sonora del juego (impacto, fallo, hundido,
 colocación inválida, victoria) a partir de una sola escritura del CPU, con duración
