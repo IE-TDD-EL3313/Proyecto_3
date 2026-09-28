@@ -2529,7 +2529,7 @@ operandos `ALU_OperandA` y `ALU_OperandB` y del código de operación
 |---|---:|---|---|
 | `ALU_Result[31:0]` | 32 bits | Salida | Resultado de la operación seleccionada. |
 
-![Diagrama de cuarto nivel de la ALU.](fig/alu.jpg)
+![Diagrama de cuarto nivel de la ALU.](fig/alu.jpeg)
 
 #### Relación con los demás módulos
 
