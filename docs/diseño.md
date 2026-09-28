@@ -2240,6 +2240,1191 @@ ante eventos consecutivos.
 
 ---
 
+### 7.15 Registro del PC
+
+El registro del PC almacena la dirección de la instrucción que se ejecuta
+en el ciclo actual. Es el único elemento de estado del camino de
+instrucciones del procesador: en cada flanco de reloj captura la
+dirección calculada por el bloque de siguiente PC.
+
+#### Objetivo
+
+El objetivo del registro del PC es mantener la dirección de la
+instrucción en ejecución y actualizarla de forma síncrona con `clk_i`,
+tomando el valor `NextPC` proveniente del multiplexor de siguiente PC.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del registro. |
+| `NextPC[31:0]` | 32 bits | Entrada | Dirección de la siguiente instrucción, proveniente del `MUX Next PC`. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `PC[31:0]` | 32 bits | Salida | Dirección de la instrucción actual. |
+
+#### Relación con los demás módulos
+
+`PC` se conecta a `ProgAddress_o` (dirección enviada a la ROM), al
+sumador `PC + 4`, al `MUX A` de la ALU y a la lógica de branch/saltos.
+Su entrada `NextPC` proviene del `MUX Next PC`.
+
+El flujo de la señal puede representarse como:
+
+**`NextPC` → Registro PC → `PC` → ROM / PC + 4 / Lógica de Branch**
+
+#### Funcionamiento
+
+En cada flanco de subida de `clk_i`, el registro captura `NextPC`:
+
+$$
+PC_{next} = NextPC
+$$
+
+Como el procesador es de ciclo único, en cada ciclo se ejecuta una
+instrucción completa y el nuevo valor del PC queda disponible para el
+ciclo siguiente.
+
+#### Diseño y justificación técnica
+
+Un único registro de 32 bits es suficiente porque no existen etapas de
+segmentación: la instrucción se busca, decodifica y ejecuta dentro del
+mismo ciclo. El registro es el único punto donde el procesador conserva
+la posición dentro del programa.
+
+#### Comportamiento durante el reset
+
+Cuando `rst_i` está activo, el registro regresa al vector de reset
+definido en el mapa de memoria:
+
+$$
+rst_i=1
+\quad\Rightarrow\quad
+PC=\texttt{0x0000\_0000}
+$$
+
+De esta forma la ejecución siempre inicia en la primera instrucción del
+programa almacenado en la ROM.
+
+#### Casos especiales y condiciones de borde
+
+El registro no realiza ninguna validación sobre `NextPC`; se asume que
+el programa solo genera direcciones dentro del rango de la ROM
+(`0x0000_0000` a `0x0000_1FFF`). Los destinos de salto siempre llegan
+con el bit 0 en cero.
+
+#### Estrategia de validación
+
+Se aplicará `rst_i` y se verificará que `PC` sea `0x0000_0000`. Luego se
+presentarán distintos valores en `NextPC` y se comprobará que `PC` los
+capture únicamente en el flanco activo de `clk_i`.
+
+---
+
+### 7.16 Sumador PC+4
+
+El sumador PC+4 calcula la dirección de la instrucción secuencial
+siguiente. Es un bloque puramente combinacional que opera en paralelo
+con el resto del datapath.
+
+#### Objetivo
+
+El objetivo del sumador es obtener `PCPlus4`, que se utiliza como
+siguiente PC cuando no hay salto y como dirección de retorno que se
+guarda en el banco de registros durante `jal` y `jalr`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `PC[31:0]` | 32 bits | Entrada | Dirección de la instrucción actual. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `PCPlus4[31:0]` | 32 bits | Salida | Dirección de la instrucción secuencial siguiente. |
+
+#### Relación con los demás módulos
+
+Recibe `PC` del registro del PC. Su salida se conecta al `MUX Next PC`
+y al `MUX Write-back`.
+
+**Registro PC → `PC` → Sumador PC+4 → `PCPlus4` → MUX Next PC / MUX Write-back**
+
+#### Funcionamiento
+
+El bloque suma la constante 4 al PC, ya que cada instrucción RV32I
+ocupa 4 bytes:
+
+$$
+PCPlus4 = PC + 4
+$$
+
+#### Diseño y justificación técnica
+
+Se utiliza un sumador dedicado en lugar de reutilizar la ALU, porque la
+ALU está ocupada en el mismo ciclo ejecutando la operación de la
+instrucción actual. Al ser el segundo operando una constante, el
+sumador es más simple que uno de propósito general.
+
+#### Comportamiento durante el reset
+
+Al ser combinacional no tiene estado propio. Mientras `PC` valga
+`0x0000_0000` tras el reset, `PCPlus4` valdrá `0x0000_0004`.
+
+#### Casos especiales y condiciones de borde
+
+Un desbordamiento de 32 bits no es alcanzable, ya que el programa
+reside en el rango `0x0000_0000` a `0x0000_1FFF`.
+
+#### Estrategia de validación
+
+Se verificará mediante aserciones en el banco de pruebas del datapath
+que `PCPlus4` sea siempre igual a `PC + 4` para valores representativos
+de `PC`, incluyendo el inicial y el último de la ROM.
+
+---
+
+### 7.17 Banco de registros
+
+El banco de registros almacena los registros de propósito general de la
+arquitectura RV32I. Ofrece dos puertos de lectura combinacionales y un
+puerto de escritura síncrono, y garantiza que el registro `x0` siempre
+entregue cero.
+
+#### Objetivo
+
+El objetivo del banco de registros es suministrar los operandos fuente
+`RD1` y `RD2` de la instrucción en curso y almacenar el resultado
+`WriteData` en el registro destino `rd` cuando `RegWrite` está activo.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `rst_i` | 1 bit | Entrada | Reinicio del módulo. |
+| `rs1[4:0]` | 5 bits | Entrada | Índice del primer registro fuente. |
+| `rs2[4:0]` | 5 bits | Entrada | Índice del segundo registro fuente. |
+| `rd[4:0]` | 5 bits | Entrada | Índice del registro destino. |
+| `WriteData[31:0]` | 32 bits | Entrada | Dato a escribir en `rd`. |
+| `RegWrite` | 1 bit | Entrada | Habilitación de escritura. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `RD1[31:0]` | 32 bits | Salida | Valor del registro `rs1`. |
+| `RD2[31:0]` | 32 bits | Salida | Valor del registro `rs2`. |
+
+![Diagrama de cuarto nivel del banco de registros.](fig/banco_registros.jpeg)
+
+#### Relación con los demás módulos
+
+Los índices `rs1`, `rs2` y `rd` provienen del decodificador de
+instrucción, `RegWrite` de la unidad de control y `WriteData` del
+`MUX Write-back`. Las salidas `RD1` y `RD2` alimentan los multiplexores
+de operandos de la ALU, el comparador de bifurcaciones y la lógica de
+branch/saltos. Además, `RD2` se envía como `DataOut_o` para las
+instrucciones de almacenamiento.
+
+**Decodificador de instrucción → `rs1`/`rs2`/`rd` → Banco de registros → `RD1`/`RD2` → ALU / Branch / Memoria**
+
+#### Funcionamiento
+
+El banco físico contiene 31 registros de 32 bits (`x1` a `x31`). Cada
+puerto de lectura utiliza un multiplexor que selecciona entre el bus de
+lectura del banco y la constante cero:
+
+$$
+RD1 =
+\begin{cases}
+0, & \text{si } rs1 = 0 \\
+x[rs1], & \text{en otro caso}
+\end{cases}
+$$
+
+$$
+RD2 =
+\begin{cases}
+0, & \text{si } rs2 = 0 \\
+x[rs2], & \text{en otro caso}
+\end{cases}
+$$
+
+Para la escritura, un decodificador combina `RegWrite` y `rd` y genera
+un vector `WriteEnable[31:1]` de una sola línea activa:
+
+$$
+WriteEnable[i] = RegWrite \cdot (rd = i), \quad i = 1,\dots,31
+$$
+
+En el flanco de subida de `clk_i`, el registro cuya línea esté activa
+captura `WriteData`. No existe línea de habilitación para `x0`.
+
+#### Diseño y justificación técnica
+
+Se implementa `x0` como una constante seleccionada por el multiplexor de
+lectura y no como un registro al que se ignora la escritura. Con esta
+estructura es imposible modificar `x0`, sin depender de lógica adicional
+que descarte la escritura. Además, se ahorra un registro de 32 bits.
+
+Las lecturas son combinacionales porque los operandos deben estar
+disponibles dentro del mismo ciclo en que se ejecuta la instrucción, y
+la escritura es síncrona para que el resultado se almacene al final del
+ciclo.
+
+#### Comportamiento durante el reset
+
+El programa en ensamblador no debe suponer valores iniciales en los
+registros, por lo que el reset no es obligatorio para el
+funcionamiento del programa. En simulación se recomienda inicializar
+los registros en cero para evitar valores indefinidos.
+
+#### Casos especiales y condiciones de borde
+
+Cuando `rd` coincide con `rs1` o `rs2` en la misma instrucción, la
+lectura devuelve el valor anterior a la escritura, ya que esta última
+solo se realiza en el siguiente flanco de reloj. Una escritura con
+`rd = 0` no tiene ningún efecto.
+
+#### Estrategia de validación
+
+Se escribirá un patrón distinto en cada registro `x1` a `x31` y se
+leerá de vuelta por ambos puertos. También se intentará escribir en
+`x0` y se comprobará que su lectura permanece en cero, y se verificará
+el caso en que `rd` coincide con `rs1`.
+
+---
+
+### 7.18 ALU
+
+La ALU ejecuta la operación aritmética, lógica, de desplazamiento o de
+comparación correspondiente a la instrucción actual. Está formada por
+cuatro unidades funcionales que operan en paralelo y un multiplexor que
+selecciona el resultado final.
+
+#### Objetivo
+
+El objetivo de la ALU es producir `ALU_Result` a partir de los
+operandos `ALU_OperandA` y `ALU_OperandB` y del código de operación
+`ALU_Control`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ALU_OperandA[31:0]` | 32 bits | Entrada | Primer operando, proveniente del `MUX A`. |
+| `ALU_OperandB[31:0]` | 32 bits | Entrada | Segundo operando, proveniente del `MUX B`. |
+| `ALU_Control[3:0]` | 4 bits | Entrada | Código de la operación a realizar. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ALU_Result[31:0]` | 32 bits | Salida | Resultado de la operación seleccionada. |
+
+![Diagrama de cuarto nivel de la ALU.](fig/alu.jpg)
+
+#### Relación con los demás módulos
+
+Los operandos provienen de los multiplexores de operandos y
+`ALU_Control` de la unidad de control. `ALU_Result` se conecta a
+`DataAddress_o` y al `MUX Write-back`.
+
+**Multiplexores de operandos + Unidad de control → ALU → `ALU_Result` → Memoria de datos / MUX Write-back**
+
+#### Funcionamiento
+
+El decodificador de operación traduce `ALU_Control` en las señales de
+selección internas: `Sub_select`, `LogicSelect[1:0]`, `ShiftSelect[1:0]`,
+`UnsignedSelect` y `Result_Select[2:0]`. Las cuatro unidades funcionales
+calculan su resultado de forma simultánea:
+
+- Sumador/restador, con resultado `Arithmetic_Result`.
+- Unidad lógica AND/OR/XOR, con resultado `Logic_Result`.
+- Desplazador SLL/SRL/SRA, con resultado `Shift_Result`.
+- Comparadores SLT/SLTU, cuyo resultado de 1 bit se extiende con ceros a
+  32 bits (`Compare_Word`).
+
+El multiplexor de resultado escoge una de las cuatro salidas según
+`Result_Select`. La tabla de verdad del decodificador de operación es:
+
+| ALU_Control | Operación | Sub_select | LogicSelect | ShiftSelect | UnsignedSelect | Result_Select |
+|---|---|---|---|---|---|---|
+| `0000` | add | 0 | – | – | – | `000` |
+| `0001` | sub | 1 | – | – | – | `000` |
+| `0010` | and | – | `00` | – | – | `001` |
+| `0011` | or | – | `01` | – | – | `001` |
+| `0100` | xor | – | `10` | – | – | `001` |
+| `0101` | sll | – | – | `00` | – | `010` |
+| `0110` | srl | – | – | `01` | – | `010` |
+| `0111` | sra | – | – | `10` | – | `010` |
+| `1000` | slt | – | – | – | 0 | `011` |
+| `1001` | sltu | – | – | – | 1 | `011` |
+
+Las operaciones aritméticas se expresan como:
+
+$$
+Arithmetic\_Result =
+\begin{cases}
+A + B, & \text{si } Sub\_select = 0 \\
+A - B, & \text{si } Sub\_select = 1
+\end{cases}
+$$
+
+#### Diseño y justificación técnica
+
+Se divide la ALU en unidades funcionales independientes en lugar de una
+única descripción monolítica. Cada unidad puede sintetizarse y
+verificarse por separado, y la estructura refleja el hardware real. El
+costo es que se calculan las cuatro operaciones en cada ciclo aunque
+solo se use una, lo cual es aceptable en un procesador de ciclo único
+con pocos recursos por operación.
+
+`ALU_Control` utiliza 4 bits porque solo hay diez operaciones distintas.
+
+#### Comportamiento durante el reset
+
+La ALU es combinacional y no tiene estado propio, por lo que no
+requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+En los desplazamientos solo se utilizan los 5 bits menos significativos
+de `ALU_OperandB`, ya que un registro de 32 bits admite desplazamientos
+de 0 a 31 posiciones. Las comparaciones `slt` y `sltu` difieren en la
+interpretación de los operandos: con signo en complemento a dos y sin
+signo, respectivamente. En la suma y la resta el desbordamiento se
+descarta, como define la arquitectura RISC-V.
+
+#### Estrategia de validación
+
+Se probarán las diez operaciones con pares de operandos que incluyan
+cero, valores negativos, máximo positivo y mínimo negativo,
+desbordamiento de suma y resta, y desplazamientos por 0 y por 31,
+comparando cada resultado con el valor esperado calculado en el banco
+de pruebas.
+
+---
+
+### 7.19 Generador de inmediatos
+
+El generador de inmediatos extrae el campo inmediato de la instrucción
+y lo extiende con signo a 32 bits. La posición de los bits del
+inmediato depende del formato de la instrucción, por lo que el bloque
+calcula los cuatro formatos soportados y selecciona uno.
+
+#### Objetivo
+
+El objetivo del generador es entregar `Imm[31:0]` con el formato
+indicado por `ImmSrc`: I, S, B o J.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ProgIn_i[31:0]` | 32 bits | Entrada | Instrucción completa leída de la ROM. |
+| `ImmSrc[1:0]` | 2 bits | Entrada | Selección del formato de inmediato. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `Imm[31:0]` | 32 bits | Salida | Inmediato extendido con signo. |
+
+![Diagrama de cuarto nivel del generador de inmediatos.](fig/generador_inmediatos.jpeg)
+
+#### Relación con los demás módulos
+
+`ImmSrc` proviene de la unidad de control. `Imm` se conecta al
+`MUX B` de la ALU y a la lógica de branch/saltos.
+
+**ROM → `ProgIn_i` → Generador de inmediatos → `Imm` → MUX B / Lógica de branch**
+
+#### Funcionamiento
+
+Cuatro bloques de cableado y extensión de signo operan en paralelo,
+uno por formato (`ImmI`, `ImmS`, `ImmB`, `ImmJ`). Un multiplexor de
+4 a 1 selecciona la salida según `ImmSrc`:
+
+| ImmSrc | Formato | Instrucciones | Composición (signo en `Instr[31]`) |
+|---|---|---|---|
+| `00` | I | `lw`, aritméticas con inmediato, `jalr` | `Instr[31:20]` |
+| `01` | S | `sw` | `Instr[31:25]`, `Instr[11:7]` |
+| `10` | B | `beq`, `bne`, `blt`, `bge` | `Instr[31]`, `Instr[7]`, `Instr[30:25]`, `Instr[11:8]`, `0` |
+| `11` | J | `jal` | `Instr[31]`, `Instr[19:12]`, `Instr[20]`, `Instr[30:21]`, `0` |
+
+#### Diseño y justificación técnica
+
+Calcular los cuatro formatos en paralelo y seleccionar al final con un
+multiplexor mantiene el bloque puramente combinacional y con un retardo
+independiente del formato. Cada formato es solo cableado y replicación
+del bit de signo, por lo que no consume lógica aritmética.
+
+Se codifica `ImmSrc` con 2 bits porque solo se soportan cuatro formatos;
+el formato U (`lui`, `auipc`) no forma parte del conjunto de
+instrucciones requerido.
+
+#### Comportamiento durante el reset
+
+El bloque es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+En los formatos B y J el bit menos significativo del inmediato es
+siempre cero, porque los destinos de salto están alineados a 2 bytes;
+ese bit no se extrae de la instrucción sino que se fija en cero. El bit
+de signo se replica sobre los bits altos, por lo que los inmediatos
+negativos deben producir valores con los bits altos en uno.
+
+#### Estrategia de validación
+
+Se probará al menos una instrucción de cada formato con inmediato
+positivo y con inmediato negativo, comparando bit a bit `Imm` contra el
+valor calculado manualmente.
+
+---
+
+### 7.20 Unidad de control
+
+La unidad de control decodifica los campos `opcode`, `funct3` y
+`funct7` de la instrucción y genera todas las señales de control del
+datapath. Está formada por un decodificador de instrucciones, que
+identifica cuál de las instrucciones soportadas se recibió, y una
+lógica combinacional que traduce esa identificación en señales de
+control.
+
+#### Objetivo
+
+El objetivo de la unidad de control es determinar, para cada
+instrucción, qué debe hacer cada bloque del procesador en ese ciclo.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `opcode[6:0]` | 7 bits | Entrada | Campo `opcode` de la instrucción. |
+| `funct3[2:0]` | 3 bits | Entrada | Campo `funct3` de la instrucción. |
+| `funct7[6:0]` | 7 bits | Entrada | Campo `funct7` de la instrucción. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `RegWrite` | 1 bit | Salida | Habilita la escritura en el banco de registros. |
+| `ALUSrcA` | 1 bit | Salida | Selector del `MUX A`. |
+| `ALUSrcB` | 1 bit | Salida | Selector del `MUX B`. |
+| `ALUControl[3:0]` | 4 bits | Salida | Código de operación de la ALU. |
+| `ImmSrc[1:0]` | 2 bits | Salida | Formato del inmediato. |
+| `ResultSrc[1:0]` | 2 bits | Salida | Selector del `MUX Write-back`. |
+| `BranchCtrl[1:0]` | 2 bits | Salida | Tipo de comparación de branch. |
+| `Branch` | 1 bit | Salida | Indica un branch condicional. |
+| `Jump` | 1 bit | Salida | Indica un salto incondicional (`jal` o `jalr`). |
+| `JALR` | 1 bit | Salida | Distingue `jalr` de `jal`. |
+| `MemWrite` | 1 bit | Salida | Habilita la escritura en memoria de datos (`we_o`). |
+
+![Diagrama de cuarto nivel de la unidad de control.](fig/unidad_de_control.jpeg)
+
+#### Relación con los demás módulos
+
+Recibe los campos de la instrucción del decodificador de instrucción y
+controla el banco de registros, los multiplexores de operandos, la ALU,
+el generador de inmediatos, el multiplexor de write-back, la lógica de
+branch/saltos y la escritura en memoria.
+
+**Decodificador de instrucción → Unidad de control → señales de control → Datapath**
+
+#### Funcionamiento
+
+El decodificador de instrucciones y validador de campos produce un
+código interno `Instr_Sel` que identifica la instrucción. La lógica
+combinacional de control convierte `Instr_Sel` en las señales de
+salida según la siguiente tabla:
+
+| Instrucción | `opcode` | `funct3` | `funct7` | RegWrite | ImmSrc | ALUSrcB | ALUControl | MemWrite | ResultSrc | Branch | Jump | JALR | BranchCtrl |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `add` | `0110011` | `000` | `0000000` | 1 | xx | 0 | `0000` | 0 | `00` | 0 | 0 | 0 | xx |
+| `sub` | `0110011` | `000` | `0100000` | 1 | xx | 0 | `0001` | 0 | `00` | 0 | 0 | 0 | xx |
+| `and` | `0110011` | `111` | – | 1 | xx | 0 | `0010` | 0 | `00` | 0 | 0 | 0 | xx |
+| `or` | `0110011` | `110` | – | 1 | xx | 0 | `0011` | 0 | `00` | 0 | 0 | 0 | xx |
+| `xor` | `0110011` | `100` | – | 1 | xx | 0 | `0100` | 0 | `00` | 0 | 0 | 0 | xx |
+| `sll` | `0110011` | `001` | – | 1 | xx | 0 | `0101` | 0 | `00` | 0 | 0 | 0 | xx |
+| `srl` | `0110011` | `101` | `0000000` | 1 | xx | 0 | `0110` | 0 | `00` | 0 | 0 | 0 | xx |
+| `sra` | `0110011` | `101` | `0100000` | 1 | xx | 0 | `0111` | 0 | `00` | 0 | 0 | 0 | xx |
+| `slt` | `0110011` | `010` | – | 1 | xx | 0 | `1000` | 0 | `00` | 0 | 0 | 0 | xx |
+| `sltu` | `0110011` | `011` | – | 1 | xx | 0 | `1001` | 0 | `00` | 0 | 0 | 0 | xx |
+| `addi` | `0010011` | `000` | – | 1 | `00` | 1 | `0000` | 0 | `00` | 0 | 0 | 0 | xx |
+| `andi` | `0010011` | `111` | – | 1 | `00` | 1 | `0010` | 0 | `00` | 0 | 0 | 0 | xx |
+| `ori` | `0010011` | `110` | – | 1 | `00` | 1 | `0011` | 0 | `00` | 0 | 0 | 0 | xx |
+| `xori` | `0010011` | `100` | – | 1 | `00` | 1 | `0100` | 0 | `00` | 0 | 0 | 0 | xx |
+| `slli` | `0010011` | `001` | – | 1 | `00` | 1 | `0101` | 0 | `00` | 0 | 0 | 0 | xx |
+| `srli` | `0010011` | `101` | `0000000` | 1 | `00` | 1 | `0110` | 0 | `00` | 0 | 0 | 0 | xx |
+| `srai` | `0010011` | `101` | `0100000` | 1 | `00` | 1 | `0111` | 0 | `00` | 0 | 0 | 0 | xx |
+| `slti` | `0010011` | `010` | – | 1 | `00` | 1 | `1000` | 0 | `00` | 0 | 0 | 0 | xx |
+| `sltui` | `0010011` | `011` | – | 1 | `00` | 1 | `1001` | 0 | `00` | 0 | 0 | 0 | xx |
+| `lw` | `0000011` | `010` | – | 1 | `00` | 1 | `0000` | 0 | `01` | 0 | 0 | 0 | xx |
+| `sw` | `0100011` | `010` | – | 0 | `01` | 1 | `0000` | 1 | xx | 0 | 0 | 0 | xx |
+| `beq` | `1100011` | `000` | – | 0 | `10` | x | xxxx | 0 | xx | 1 | 0 | 0 | `00` |
+| `bne` | `1100011` | `001` | – | 0 | `10` | x | xxxx | 0 | xx | 1 | 0 | 0 | `01` |
+| `blt` | `1100011` | `100` | – | 0 | `10` | x | xxxx | 0 | xx | 1 | 0 | 0 | `10` |
+| `bge` | `1100011` | `101` | – | 0 | `10` | x | xxxx | 0 | xx | 1 | 0 | 0 | `11` |
+| `jal` | `1101111` | – | – | 1 | `11` | x | xxxx | 0 | `10` | 0 | 1 | 0 | xx |
+| `jalr` | `1100111` | `000` | – | 1 | `00` | x | xxxx | 0 | `10` | 0 | 1 | 1 | xx |
+
+La señal `ALUSrcA` se mantiene en 0 (`RD1`) para todas las instrucciones
+soportadas.
+
+#### Diseño y justificación técnica
+
+Se genera `ALUControl` dentro de la unidad de control, en lugar de
+enviar `funct3` y `funct7` hasta la ALU. Así la ALU queda independiente
+del formato de instrucción RISC-V y toda la información de
+decodificación se concentra en un único módulo que puede verificarse
+contra la tabla anterior.
+
+Se utilizan señales `Jump` y `JALR` separadas porque `jal` y `jalr`
+calculan el destino con bases distintas (`PC` y `RD1`, respectivamente).
+`BranchCtrl` y `ImmSrc` utilizan 2 bits porque solo se distinguen cuatro
+casos en cada una.
+
+#### Comportamiento durante el reset
+
+La unidad de control es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+Cualquier combinación de `opcode`, `funct3` y `funct7` que no
+corresponda a una instrucción soportada debe producir `RegWrite = 0`,
+`MemWrite = 0`, `Branch = 0` y `Jump = 0`, de modo que una instrucción
+inválida no modifique el estado del procesador.
+
+#### Estrategia de validación
+
+Se recorrerán todas las instrucciones soportadas y se comparará cada
+señal de salida con la tabla de funcionamiento. Adicionalmente, se
+probarán combinaciones inválidas de `opcode` y `funct` para comprobar
+que ninguna escribe en registros ni en memoria.
+
+---
+
+### 7.21 Comparador de bifurcaciones y lógica de branch/saltos
+
+Este bloque determina si una instrucción de control de flujo cambia el
+PC y calcula la dirección de destino. Está formado por el comparador de
+bifurcaciones, que evalúa la condición de los branches, y por la lógica
+de branch/saltos, que calcula `TargetPC` y genera `PCsrc`.
+
+#### Objetivo
+
+El objetivo del bloque es producir `TargetPC`, la dirección de destino
+de los branches y saltos, y `PCsrc`, la señal que indica al `MUX Next PC`
+si debe tomarse ese destino en lugar de `PC + 4`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `RD1[31:0]` | 32 bits | Entrada | Primer operando de comparación y base de `jalr`. |
+| `RD2[31:0]` | 32 bits | Entrada | Segundo operando de comparación. |
+| `PC[31:0]` | 32 bits | Entrada | Dirección de la instrucción actual. |
+| `Imm[31:0]` | 32 bits | Entrada | Inmediato de formato B, J o I. |
+| `BranchCtrl[1:0]` | 2 bits | Entrada | Tipo de comparación del branch. |
+| `Branch` | 1 bit | Entrada | Indica un branch condicional. |
+| `Jump` | 1 bit | Entrada | Indica un salto incondicional. |
+| `JALR` | 1 bit | Entrada | Distingue `jalr` de `jal`. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `TargetPC[31:0]` | 32 bits | Salida | Dirección de destino del branch o salto. |
+| `PCsrc` | 1 bit | Salida | Selección del `MUX Next PC`. |
+
+![Diagrama de cuarto nivel del comparador de bifurcaciones.](fig/comparador_bifuraciones.jpeg)
+
+![Diagrama de cuarto nivel de la lógica de branch/saltos.](fig/logica_branch.jpeg)
+
+#### Relación con los demás módulos
+
+`RD1` y `RD2` provienen del banco de registros, `PC` del registro del
+PC, `Imm` del generador de inmediatos y las señales de control de la
+unidad de control. `TargetPC` y `PCsrc` se conectan al `MUX Next PC`.
+
+**Banco de registros + Unidad de control → Comparador y lógica de branch → `TargetPC` / `PCsrc` → MUX Next PC**
+
+#### Funcionamiento
+
+**Comparador de bifurcaciones.** Un comparador de igualdad genera `EQ`
+y un comparador con signo genera `LT`. Dos inversores obtienen
+`NE = ¬EQ` y `GE = ¬LT`. Un multiplexor de 4 a 1 de un bit, seleccionado
+por `BranchCtrl`, entrega `BranchTaken`:
+
+| BranchCtrl | Instrucción | BranchTaken |
+|---|---|---|
+| `00` | `beq` | `EQ` |
+| `01` | `bne` | `NE` |
+| `10` | `blt` | `LT` |
+| `11` | `bge` | `GE` |
+
+**Cálculo del destino.** Un multiplexor de 2 a 1 selecciona la base del
+cálculo entre `PC` y `RD1`, según `JALR`. Un sumador de 32 bits suma
+esa base con `Imm`:
+
+$$
+TargetSum = Base + Imm, \qquad
+Base =
+\begin{cases}
+PC, & \text{si } JALR = 0 \\
+RD1, & \text{si } JALR = 1
+\end{cases}
+$$
+
+Una red de compuertas AND aplica la máscara `0xFFFF_FFFE` para poner en
+cero el bit 0:
+
+$$
+AlignedTarget = TargetSum \,\&\, \texttt{0xFFFFFFFE}
+$$
+
+Un segundo multiplexor, seleccionado por `JALR`, entrega `AlignedTarget`
+para `jalr` y `TargetSum` en los demás casos.
+
+**Selección de destino.** La señal `PCsrc` se obtiene con una
+compuerta AND y una compuerta OR:
+
+$$
+ConditionalTaken = Branch \cdot BranchTaken
+$$
+
+$$
+PCsrc = ConditionalTaken + Jump
+$$
+
+#### Diseño y justificación técnica
+
+Con la señal `JALR` separada de `Jump`, un único sumador sirve para los
+tres tipos de cálculo de destino: branch y `jal` usan `PC + Imm`, y
+`jalr` usa `RD1 + Imm`. Solo cambia la base de la suma.
+
+La máscara sobre el bit 0 responde a la especificación RISC-V, que
+exige poner en cero el bit menos significativo de la dirección
+calculada por `jalr`. En los branches y en `jal` el bit 0 del
+inmediato ya es cero por construcción.
+
+El comparador solo incluye comparación con signo porque las
+instrucciones requeridas son `beq`, `bne`, `blt` y `bge`.
+
+#### Comportamiento durante el reset
+
+El bloque es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+Cuando `Branch` y `Jump` están en cero, `PCsrc` es cero y el
+`MUX Next PC` selecciona `PC + 4`. Si `RD1 + Imm` es impar en un
+`jalr`, la máscara garantiza que `TargetPC` quede alineado. Los
+destinos hacia atrás (inmediato negativo) dependen de la correcta
+extensión de signo del generador de inmediatos.
+
+#### Estrategia de validación
+
+Se probará cada una de las cuatro condiciones de branch en los casos
+tomado y no tomado, incluyendo operandos negativos para `blt` y `bge`.
+También se probarán `jal` y `jalr` con desplazamientos positivos y
+negativos, y un `jalr` con destino impar, verificando `TargetPC` y
+`PCsrc` contra valores calculados manualmente.
+
+---
+
+### 7.22 Multiplexores de operandos de la ALU
+
+Los multiplexores de operandos seleccionan los valores que entran a la
+ALU. El `MUX A` escoge el primer operando y el `MUX B` el segundo.
+
+#### Objetivo
+
+El objetivo de estos multiplexores es permitir que la ALU opere tanto
+con dos registros como con un registro y un inmediato, según el tipo de
+instrucción.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `RD1[31:0]` | 32 bits | Entrada | Primer registro fuente. |
+| `PC[31:0]` | 32 bits | Entrada | Dirección de la instrucción actual (entrada reservada del `MUX A`). |
+| `RD2[31:0]` | 32 bits | Entrada | Segundo registro fuente. |
+| `Imm[31:0]` | 32 bits | Entrada | Inmediato de la instrucción. |
+| `ALUSrcA` | 1 bit | Entrada | Selector del `MUX A`. |
+| `ALUSrcB` | 1 bit | Entrada | Selector del `MUX B`. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ALU_OperandA[31:0]` | 32 bits | Salida | Primer operando de la ALU. |
+| `ALU_OperandB[31:0]` | 32 bits | Salida | Segundo operando de la ALU. |
+
+#### Relación con los demás módulos
+
+Las entradas provienen del banco de registros, del registro del PC y
+del generador de inmediatos; los selectores provienen de la unidad de
+control. Las salidas alimentan la ALU.
+
+**Banco de registros / Generador de inmediatos → MUX A / MUX B → ALU**
+
+#### Funcionamiento
+
+$$
+ALU\_OperandA =
+\begin{cases}
+RD1, & \text{si } ALUSrcA = 0 \\
+PC, & \text{si } ALUSrcA = 1
+\end{cases}
+$$
+
+$$
+ALU\_OperandB =
+\begin{cases}
+RD2, & \text{si } ALUSrcB = 0 \\
+Imm, & \text{si } ALUSrcB = 1
+\end{cases}
+$$
+
+#### Diseño y justificación técnica
+
+Son multiplexores de 2 a 1 puramente combinacionales, por lo que no
+requieren un diagrama interno. Para las instrucciones requeridas,
+`ALUSrcA` siempre vale 0; la entrada `PC` se conserva únicamente por si
+se amplía el conjunto de instrucciones con `auipc`.
+
+#### Comportamiento durante el reset
+
+Los multiplexores son combinacionales y no requieren lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+En las instrucciones de branch y salto, `ALUSrcB` es indiferente porque
+la ALU no participa en la decisión del salto. En `lw` y `sw`, `ALUSrcB`
+selecciona el inmediato para calcular la dirección efectiva.
+
+#### Estrategia de validación
+
+Se verificarán en la simulación del datapath los valores de
+`ALU_OperandA` y `ALU_OperandB` para una instrucción de tipo R, una de
+tipo I y una de acceso a memoria.
+
+---
+
+### 7.23 Multiplexor de write-back
+
+El multiplexor de write-back selecciona el dato que se escribe en el
+banco de registros al final de la instrucción.
+
+#### Objetivo
+
+El objetivo del multiplexor es entregar `WriteData` a partir de una de
+tres fuentes: el resultado de la ALU, el dato leído de memoria o la
+dirección de retorno `PC + 4`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ALU_Result[31:0]` | 32 bits | Entrada | Resultado de la ALU. |
+| `DataIn_i[31:0]` | 32 bits | Entrada | Dato leído de la memoria de datos o de un periférico. |
+| `PCPlus4[31:0]` | 32 bits | Entrada | Dirección de retorno para `jal` y `jalr`. |
+| `ResultSrc[1:0]` | 2 bits | Entrada | Selector del multiplexor. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `WriteData[31:0]` | 32 bits | Salida | Dato a escribir en el banco de registros. |
+
+#### Relación con los demás módulos
+
+`ResultSrc` proviene de la unidad de control. La salida `WriteData` se
+conecta al banco de registros.
+
+**ALU / Memoria / PC+4 → MUX Write-back → `WriteData` → Banco de registros**
+
+#### Funcionamiento
+
+$$
+WriteData =
+\begin{cases}
+ALU\_Result, & ResultSrc = 00 \\
+DataIn\_i, & ResultSrc = 01 \\
+PCPlus4, & ResultSrc = 10
+\end{cases}
+$$
+
+#### Diseño y justificación técnica
+
+Un multiplexor combinacional de tres entradas concentra en un solo
+punto todas las fuentes posibles del resultado, sin necesidad de
+diagrama interno. Con 2 bits de selección queda una combinación sin
+uso (`11`).
+
+#### Comportamiento durante el reset
+
+El multiplexor es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+Para instrucciones que no escriben en registros (`sw`, branches),
+`ResultSrc` es indiferente, ya que `RegWrite` está en cero.
+
+#### Estrategia de validación
+
+Se verificará en la simulación del datapath que `WriteData` corresponda
+al resultado de la ALU en una instrucción aritmética, al dato de
+memoria en un `lw` y a `PC + 4` en un `jal`.
+
+---
+
+### 7.24 ROM
+
+La ROM almacena el programa en ensamblador del juego, ya convertido a
+código máquina. Se accede mediante un bus de instrucciones
+independiente del bus de datos, como lo exige la especificación del
+proyecto.
+
+#### Objetivo
+
+El objetivo de la ROM es entregar la instrucción almacenada en la
+dirección indicada por el PC.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ProgAddress_o[31:0]` | 32 bits | Entrada | Dirección de la instrucción solicitada por el procesador. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `ProgIn_i[31:0]` | 32 bits | Salida | Instrucción almacenada en la dirección solicitada. |
+
+#### Relación con los demás módulos
+
+`ProgAddress_o` proviene del registro del PC y `ProgIn_i` se conecta al
+decodificador de instrucción y al generador de inmediatos. Se
+representa con el mismo bloque que aparece en el diagrama de tercer
+nivel del sistema.
+
+**Registro PC → `ProgAddress_o` → ROM → `ProgIn_i` → Decodificador de instrucción**
+
+#### Funcionamiento
+
+La ROM ocupa el rango `0x0000_0000` a `0x0000_1FFF` (8 KiB, 2048
+palabras de 32 bits). Como las instrucciones están alineadas a 4
+bytes, se descartan los dos bits menos significativos de la dirección
+y se utilizan los bits `[12:2]` como índice de palabra:
+
+$$
+ProgIn\_i = ROM[ProgAddress\_o[12:2]]
+$$
+
+El contenido se carga desde el archivo generado al ensamblar el
+programa.
+
+#### Diseño y justificación técnica
+
+La lectura se describe como combinacional porque el procesador es de
+ciclo único: la instrucción debe estar disponible dentro del mismo
+ciclo en que el PC cambia. Con una lectura síncrona la instrucción
+llegaría un ciclo tarde y el procesador ejecutaría la instrucción
+anterior. El tamaño de 2048 palabras es pequeño y puede implementarse
+con la memoria distribuida de la FPGA.
+
+No se realiza un diagrama de cuarto nivel porque la ROM es un arreglo
+de memoria sin lógica interna propia que descomponer.
+
+#### Comportamiento durante el reset
+
+El contenido de la ROM no depende de `rst_i`. Tras el reset, el PC vale
+`0x0000_0000` y la ROM entrega la primera instrucción del programa.
+
+#### Casos especiales y condiciones de borde
+
+Las direcciones fuera del rango `0x0000_0000` a `0x0000_1FFF` no
+ocurren en operación normal, y por eso no se les asigna comportamiento.
+Los bits `[1:0]` de la dirección se ignoran.
+
+#### Estrategia de validación
+
+Se recorrerán las direcciones del programa cargado y se comparará
+`ProgIn_i` contra el archivo fuente, incluyendo la primera y la última
+palabra del rango.
+
+---
+
+### 7.25 RAM
+
+La RAM almacena los datos del programa: los tableros de ambos jugadores,
+el turno activo, los contadores de partidas y la pila. Se accede
+mediante el bus de datos, compartido con los periféricos.
+
+#### Objetivo
+
+El objetivo de la RAM es almacenar y devolver palabras de 32 bits en
+las direcciones del rango `0x0000_2000` a `0x0000_2FFF`.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `clk_i` | 1 bit | Entrada | Reloj principal del sistema. |
+| `vam.addr[9:0]` | 10 bits | Entrada | Dirección local de palabra, generada por el adaptador de dirección. |
+| `DataOut_o[31:0]` | 32 bits | Entrada | Dato a escribir, proveniente del procesador. |
+| `we.RAM` | 1 bit | Entrada | Habilitación de escritura, proveniente del decodificador de direcciones. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `vam.rdata[31:0]` | 32 bits | Salida | Dato leído de la dirección local. |
+
+#### Relación con los demás módulos
+
+El adaptador de dirección RAM convierte `DataAddress_o` en `vam.addr`,
+el decodificador de direcciones genera `we.RAM` y la salida
+`vam.rdata` se dirige al multiplexor de lectura. Se representa con el
+mismo bloque que aparece en el diagrama de tercer nivel del sistema.
+
+**Procesador → Adaptador de dirección → RAM → `vam.rdata` → MUX de lectura → `DataIn_i`**
+
+#### Funcionamiento
+
+La RAM contiene 1024 palabras de 32 bits (4 KiB). El adaptador de
+dirección elimina la base `0x0000_2000` y los dos bits de byte,
+quedando:
+
+$$
+vam.addr = DataAddress\_o[11:2]
+$$
+
+La escritura es síncrona: en el flanco de subida de `clk_i`, si
+`we.RAM = 1`, se almacena `DataOut_o` en la posición `vam.addr`. La
+lectura es combinacional:
+
+$$
+vam.rdata = RAM[vam.addr]
+$$
+
+#### Diseño y justificación técnica
+
+Se utiliza lectura combinacional y escritura síncrona porque en un
+procesador de ciclo único el dato de un `lw` debe estar disponible
+dentro del mismo ciclo para escribirse en el banco de registros. El
+adaptador de dirección permite que la RAM no dependa de su posición en
+el mapa de memoria global.
+
+No se realiza un diagrama de cuarto nivel porque la RAM es un arreglo
+de memoria sin lógica interna propia que descomponer.
+
+#### Comportamiento durante el reset
+
+El contenido de la RAM no se reinicia con `rst_i`. El enunciado
+establece que la limpieza de los tableros y de los contadores se
+realiza por software en la etapa de inicialización del programa.
+
+#### Casos especiales y condiciones de borde
+
+Solo se escribe en la RAM cuando el decodificador de direcciones activa
+`we.RAM`, es decir, cuando la dirección está dentro de su rango. Los
+accesos en los extremos del rango (`0x0000_2000` y `0x0000_2FFC`) deben
+funcionar correctamente.
+
+#### Estrategia de validación
+
+Se escribirán y leerán patrones de datos distintos en varias
+direcciones, incluyendo la primera y la última palabra, y se
+comprobará que una escritura con `we.RAM = 0` no modifica el contenido.
+
+---
+
+### 7.26 Decodificador de direcciones
+
+El decodificador de direcciones determina, a partir de
+`DataAddress_o`, qué memoria o periférico participa en el acceso de
+datos actual. Incluye el generador de habilitaciones de escritura, que
+combina cada selección con la señal `we_o` del procesador.
+
+#### Objetivo
+
+El objetivo del decodificador es activar una única línea de selección
+por acceso y generar la habilitación de escritura correspondiente a la
+RAM y a cada periférico.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `DataAddress_o[31:0]` | 32 bits | Entrada | Dirección del acceso a datos. |
+| `we_o` | 1 bit | Entrada | Escritura solicitada por el procesador. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `sel_RAM` | 1 bit | Salida | Selecciona la RAM de datos. |
+| `sel_UART` | 1 bit | Salida | Selecciona el periférico UART. |
+| `sel_INPUT` | 1 bit | Salida | Selecciona las entradas del Jugador 1. |
+| `sel_DISPLAY` | 1 bit | Salida | Selecciona los displays de 7 segmentos. |
+| `sel_LED` | 1 bit | Salida | Selecciona el LED de estado. |
+| `sel_Buzzer` | 1 bit | Salida | Selecciona el buzzer. |
+| `sel_VGA` | 1 bit | Salida | Selecciona la memoria de video. |
+| `we.RAM`, `we.UART`, `we.DISPLAY`, `we.LED`, `we.Buzzer`, `we.VGA` | 1 bit c/u | Salida | Habilitación de escritura de cada destino. |
+
+![Diagrama de cuarto nivel del decodificador de direcciones.](fig/decodificador_direcciones.jpeg)
+
+#### Relación con los demás módulos
+
+Recibe `DataAddress_o` y `we_o` del procesador. Las señales `sel_*`
+controlan el multiplexor de lectura y las señales `we.*` se conectan a
+la RAM y a cada periférico.
+
+**Procesador → Decodificador de direcciones → `sel_*` / `we.*` → RAM / Periféricos / MUX de lectura**
+
+#### Funcionamiento
+
+Cada selección se obtiene comparando la dirección con el rango del
+mapa de memoria definido en el enunciado:
+
+| Señal | Rango de direcciones |
+|---|---|
+| `sel_RAM` | `0x0000_2000` a `0x0000_2FFF` |
+| `sel_UART` | `0x0001_0040` a `0x0001_0048` |
+| `sel_INPUT` | `0x0001_0120` |
+| `sel_DISPLAY` | `0x0001_0130` |
+| `sel_LED` | `0x0001_0138` |
+| `sel_Buzzer` | `0x0001_0140` |
+| `sel_VGA` | `0x0001_1000` a `0x0001_17FF` |
+
+Cada habilitación de escritura se obtiene como:
+
+$$
+we.X = we\_o \cdot sel\_X
+$$
+
+Las entradas del Jugador 1 son de solo lectura, por lo que no tienen
+señal de escritura.
+
+#### Diseño y justificación técnica
+
+Se decodifica por rangos para cubrir de forma simple los destinos que
+ocupan varias direcciones: los tres registros del UART y la memoria de
+video, que abarca 512 palabras. Los rangos son disjuntos, así que a lo
+sumo una selección está activa por acceso.
+
+#### Comportamiento durante el reset
+
+El decodificador es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+Una dirección fuera de todos los rangos no activa ninguna selección ni
+ninguna habilitación de escritura, de modo que una escritura a una
+dirección inválida no afecta ningún destino. Las direcciones del UART
+dentro del rango pero no asignadas a un registro deben tratarse según
+la definición del periférico.
+
+#### Estrategia de validación
+
+Se recorrerán direcciones dentro y fuera de cada rango, incluyendo el
+primer y el último valor de cada uno, verificando que como máximo una
+línea `sel_*` esté activa y que cada `we.*` solo se active cuando
+`we_o = 1` y la dirección corresponda a su destino.
+
+---
+
+### 7.27 Multiplexor de lectura
+
+El multiplexor de lectura selecciona cuál de las fuentes de datos
+(RAM o periféricos) responde a una lectura del procesador.
+
+#### Objetivo
+
+El objetivo del multiplexor es entregar `DataIn_i` con el dato de la
+memoria o del periférico seleccionado por el decodificador de
+direcciones.
+
+#### Entradas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `vam.rdata[31:0]` | 32 bits | Entrada | Dato leído de la RAM. |
+| `rdata_UART[31:0]` | 32 bits | Entrada | Dato leído del UART. |
+| `rdata_INPUT[31:0]` | 32 bits | Entrada | Dato leído de las entradas del Jugador 1. |
+| `rdata_DISPLAY[31:0]` | 32 bits | Entrada | Dato leído de los displays. |
+| `rdata_LED[31:0]` | 32 bits | Entrada | Dato leído del LED de estado. |
+| `rdata_Buzzer[31:0]` | 32 bits | Entrada | Dato leído del buzzer. |
+| `rdata_VGA[31:0]` | 32 bits | Entrada | Dato leído de la memoria de video. |
+| `sel_*` | 1 bit c/u | Entrada | Señales de selección del decodificador de direcciones. |
+
+#### Salidas
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---:|---|---|
+| `DataIn_i[31:0]` | 32 bits | Salida | Dato entregado al procesador. |
+
+#### Relación con los demás módulos
+
+Recibe las salidas de lectura de la RAM y de los periféricos, y las
+selecciones del decodificador de direcciones. Su salida se conecta al
+puerto `DataIn_i` del procesador.
+
+**RAM / Periféricos → MUX de lectura → `DataIn_i` → Procesador**
+
+#### Funcionamiento
+
+La salida corresponde a la fuente cuya señal de selección está activa:
+
+$$
+DataIn\_i =
+\begin{cases}
+vam.rdata, & sel\_RAM = 1 \\
+rdata\_UART, & sel\_UART = 1 \\
+\vdots & \vdots \\
+rdata\_VGA, & sel\_VGA = 1 \\
+0, & \text{en otro caso}
+\end{cases}
+$$
+
+#### Diseño y justificación técnica
+
+Se utiliza un multiplexor central en lugar de un bus compartido con
+lógica de tres estados, porque los buses tri-estado internos no son la
+práctica recomendada en una FPGA y el multiplexor es más sencillo de
+sintetizar y verificar. Como el decodificador activa a lo sumo una
+selección, no hay ambigüedad.
+
+#### Comportamiento durante el reset
+
+El multiplexor es combinacional y no requiere lógica de reset.
+
+#### Casos especiales y condiciones de borde
+
+Si ninguna selección está activa, la salida se fuerza a cero. Esto evita
+inferir latches y entrega un valor definido ante una lectura de
+dirección inválida.
+
+#### Estrategia de validación
+
+Se validará junto con el decodificador de direcciones: para cada
+dirección de prueba se comprobará que `DataIn_i` corresponda a la
+fuente esperada y que valga cero para direcciones fuera de rango.
+
 ## 8. Mapa de memoria, registros y organización de datos
 
 ### 8.1 Mapa de memoria
