@@ -2101,8 +2101,8 @@ ambos jugadores (00–99 cada uno) mediante multiplexado.
 | `rst_i` | 1 bit | Entrada | Reset del módulo. |
 | `wdata_i` | 32 bits | Entrada | 4 dígitos BCD (`0x0001_0130`). |
 | `we_i` | 1 bit | Entrada | Habilitación de escritura. |
-| `seg_o` | 7 bits | Salida | Patrón de segmentos activos. |
-| `anode_o` | 4 bits | Salida | Ánodo del dígito activo. |
+| `seg_o` | 7 bits | Salida | Patrón de segmentos activo en bajo. |
+| `anode_o` | 4 bits | Salida | Selección de dígito activa en bajo. |
 
 **Relación con los demás módulos:** módulo hoja; recibe datos del CPU vía bus de periféricos.
 
@@ -2114,20 +2114,28 @@ persistencia de visión.
 divisor/módulo por 10 en hardware. Se usa tabla de consulta para el decodificador de 7
 segmentos por no seguir un patrón aritmético simple.
 
-**Tabla de verdad del decodificador (`seg_o[gfedcba]`):**
+**Tabla de verdad del decodificador (`seg_o[gfedcba]`, activo en bajo):**
 
-| Dígito | `seg_o` |
+La tarjeta Nexys 4 utiliza lógica activa en bajo tanto para los segmentos como para
+la selección de los ánodos. Por tanto, un `0` lógico en `seg_o` enciende el segmento
+correspondiente y un `0` lógico en `anode_o` habilita el dígito seleccionado.
+
+| Dígito | `seg_o[gfedcba]` |
 |---|---|
-| 0 | `0111111` |
-| 1 | `0000110` |
-| 2 | `1011011` |
-| 3 | `1001111` |
-| 4 | `1100110` |
-| 5 | `1101101` |
-| 6 | `1111101` |
-| 7 | `0000111` |
-| 8 | `1111111` |
-| 9 | `1101111` |
+| 0 | `1000000` |
+| 1 | `1111001` |
+| 2 | `0100100` |
+| 3 | `0110000` |
+| 4 | `0011001` |
+| 5 | `0010010` |
+| 6 | `0000010` |
+| 7 | `1111000` |
+| 8 | `0000000` |
+| 9 | `0010000` |
+
+La selección de dígitos también es activa en bajo. Durante el multiplexado se
+mantienen los ánodos no seleccionados en `1` y únicamente el ánodo correspondiente
+al dígito activo se lleva a `0`.
 
 **Comportamiento durante el reset:** `wdata` almacenado se fuerza a 0 (displays en "00 00");
 el recorrido de refresco reinicia desde el dígito 0.
