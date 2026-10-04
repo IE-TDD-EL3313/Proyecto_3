@@ -1964,16 +1964,28 @@ tile) se resuelve tomando los bits superiores de `hcount`/`vcount` por ser 32 po
 tile_col = hcount_i[9:5]
 tile_row = vcount_i[9:5]
 tile_addr = tile_row*20 + tile_col
-on posedge clk_i:     if (vga_we_i): mem[vga_addr_i] <= vga_wdata_i
-on posedge clk_pix_i: tile_data_o <= mem[tile_addr]
+
+on posedge clk_i:
+    if (vga_we_i AND vga_addr_i < 300):
+        mem[vga_addr_i] <= vga_wdata_i
+
+on posedge clk_pix_i:
+    if (tile_addr < 300):
+        tile_data_o <= mem[tile_addr]
+    else:
+        tile_data_o <= 0
 ```
 
 **Comportamiento durante el reset:** no se limpia por hardware (según el enunciado); la
 inicialización del contenido es responsabilidad del software.
 
-**Casos especiales y condiciones de borde:** direcciones fuera de rango durante *blanking*
-(se ignoran porque `video_on_o=0` fuerza negro aguas abajo); colisión de puerto en la misma
-dirección (no crítico, imperceptible a 60 Hz); latencia de lectura de un ciclo.
+**Casos especiales y condiciones de borde:** la memoria física contiene 300 palabras,
+correspondientes a las 20×15 casillas visibles. Las escrituras con dirección mayor o igual
+a 300 se ignoran y las lecturas fuera de este rango entregan cero. La lectura del puerto
+de video es síncrona y presenta una latencia de un ciclo de `clk_pix_i`; por ello,
+`vga_periferico` retrasa `video_on` un ciclo antes de entregarlo al generador de color,
+manteniendo alineada la habilitación de video con `tile_data_o`. Una eventual colisión de
+puertos sobre la misma dirección no es crítica para la visualización.
 
 **Estrategia de validación:** escribir un patrón conocido por el puerto A y verificar
 coincidencia al leer por el puerto B en toda la cuadrícula, incluyendo las esquinas.
