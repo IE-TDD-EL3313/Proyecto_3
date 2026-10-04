@@ -82,7 +82,7 @@ El diagrama de primer nivel representa el sistema completo de la FPGA como un ú
 
 El sistema recibe las interacciones físicas locales y remotas, procesa las acciones del juego de manera autónoma mediante el código ensamblador, y actualiza en tiempo real las pantallas y los indicadores de estado. En este nivel no se especifica cómo se realizan internamente estas funciones.
 
-![Diagrama de primer nivel del sistema](fig/diagrama_primer_nivel.jpg)
+![Diagrama de primer nivel del sistema](diagramas/diagrama_primer_nivel.jpg)
 
 ---
 
@@ -90,7 +90,7 @@ El sistema recibe las interacciones físicas locales y remotas, procesa las acci
 
 El segundo nivel divide el sistema completo en sus bloques funcionales principales: núcleo RISC-V, ROM, RAM, decodificación MMIO, UART, VGA, entradas del Jugador 1, displays/LED/buzzer, y la aplicación de PC como bloque externo conectado por UART.
 
-![Diagrama de segundo nivel del sistema](fig/diagrama_segundo_nivel.jpg)
+![Diagrama de segundo nivel del sistema](diagramas/diagrama_segundo_nivel.jpg)
 
 ---
 
@@ -440,9 +440,9 @@ de estado (`0x0001_0138`) refleja directamente la fase actual del juego. El buzz
 (`0x0001_0140`) recibe un código de tono y un disparo puntual, y genera de forma autónoma una
 señal PWM de duración fija sin requerir intervención continua del software.
 
-![Diagrama de tercer nivel del sistema1](fig/diagrama_tercer_nivel1.jpeg)
+![Diagrama de tercer nivel del sistema1](diagramas/diagrama_tercer_nivel1.jpeg)
 
-![Diagrama de tercer nivel del sistema2](fig/diagrama_tercer_nivel2.jpeg)
+![Diagrama de tercer nivel del sistema2](diagramas/diagrama_tercer_nivel2.jpeg)
 
 ---
 
@@ -567,7 +567,7 @@ recepción.
 |---|---:|---|---|
 | `rx_data_reg` | Según implementación del UART | Salida | Dato recibido y almacenado, disponible para su lectura. |
 
-![Diagrama de cuarto nivel de los registros TX y RX del UART.](fig/registros_uart.jpg)
+![Diagrama de cuarto nivel de los registros TX y RX del UART.](diagramas/registros_uart.jpg)
 
 #### Relación con los demás módulos
 
@@ -751,7 +751,7 @@ $$
 |---|---:|---|---|
 | `control_i[31:0]` | 32 bits | Salida | Palabra que contiene la información de control y estado disponible para lectura por el procesador. |
 
-![Diagrama de cuarto nivel del registro de control y estado del UART.](fig/control_estado_uart.jpg)
+![Diagrama de cuarto nivel del registro de control y estado del UART.](diagramas/control_estado_uart.jpg)
 
 #### Relación con los demás módulos
 
@@ -912,7 +912,7 @@ el conteo.
 |---|---:|---|---|
 | `baud_tick` | 1 bit | Salida | Pulso periódico utilizado como referencia temporal por los bloques UART TX y UART RX. |
 
-![Diagrama de cuarto nivel del generador de baud.](fig/generador_baud.jpg)
+![Diagrama de cuarto nivel del generador de baud.](diagramas/generador_baud.jpg)
 
 #### Relación con los demás módulos
 
@@ -1095,7 +1095,7 @@ transmisión y avanzar solamente cuando la referencia temporal
 | `uart_tx` | 1 bit | Salida | Señal serial de transmisión hacia la computadora. |
 | `estado_TX` | Según implementación | Salida | Información del estado actual del transmisor utilizada por la lógica de control/estado. |
 
-![Diagrama de cuarto nivel del transmisor UART.](fig/uart_tx.jpg)
+![Diagrama de cuarto nivel del transmisor UART.](diagramas/uart_tx.jpg)
 
 #### Relación con los demás módulos
 
@@ -1209,7 +1209,7 @@ Finalmente, después de completar el intervalo correspondiente a `STOP`,
 la máquina regresa al estado `IDLE`, quedando disponible para una nueva
 transmisión.
 
-![Máquina de estados del transmisor UART.](fig/fsm_uart_tx.jpg)
+![Máquina de estados del transmisor UART.](diagramas/fsm_uart_tx.jpg)
 
 #### Control interno del transmisor
 
@@ -1335,7 +1335,7 @@ el resultado de la validación mediante `rx_valid`.
 | `rx_valid` | 1 bit | Salida | Indica que la recepción completada cumple las condiciones de validez definidas por el receptor. |
 | `estado_RX` | Según implementación | Salida | Información del estado actual del receptor utilizada por la lógica de control/estado. |
 
-![Diagrama de cuarto nivel del receptor UART.](fig/uart_rx.jpg)
+![Diagrama de cuarto nivel del receptor UART.](diagramas/uart_rx.jpg)
 
 #### Relación con los demás módulos
 
@@ -1463,7 +1463,7 @@ $$
 Finalmente, una vez completada la etapa `STOP`, la máquina retorna a
 `IDLE` y queda disponible para una nueva recepción.
 
-![Máquina de estados del receptor UART.](fig/fsm_uart_rx.jpg)
+![Máquina de estados del receptor UART.](diagramas/fsm_uart_rx.jpg)
 
 #### Control interno del receptor
 
@@ -1614,7 +1614,7 @@ inválida.
 | `rx_load` | 1 bit | Salida | Habilita la carga de `rx_data` en el registro RX. |
 | `discard` | 1 bit | Salida | Indica que la recepción finalizada no debe almacenarse. |
 
-![Diagrama de cuarto nivel de la detección de dato recibido y la lógica de descarte y recuperación.](fig/deteccion_recuperacion_uart.jpg)
+![Diagrama de cuarto nivel de la detección de dato recibido y la lógica de descarte y recuperación.](diagramas/deteccion_recuperacion_uart.jpg)
 
 #### Relación con los demás módulos
 
@@ -1822,7 +1822,7 @@ correctamente una nueva recepción.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — PLL](fig/diagrama_cuarto_nivel_pll.png)
+![Diagrama de cuarto nivel — PLL](diagramas/diagrama_cuarto_nivel_pll.png)
 
 **Objetivo:** generar, a partir del reloj de entrada de 100 MHz, un reloj estable de 25 MHz
 para el dominio de video, indicando mediante `locked_o` cuándo la salida es válida.
@@ -1865,7 +1865,7 @@ osciloscopio/analizador lógico y verificar la activación de `locked_o` tras el
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador de temporización VGA](fig/diagrama_cuarto_nivel_temporizacion_vga.png)
+![Diagrama de cuarto nivel — Generador de temporización VGA](diagramas/diagrama_cuarto_nivel_temporizacion_vga.png)
 
 **Objetivo:** generar toda la temporización 640×480@60Hz a partir del reloj de píxel: posición
 del haz, sincronismos y detección de región visible.
@@ -1927,7 +1927,7 @@ rectángulo 640×480.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Memoria de video](fig/diagrama_cuarto_nivel_memoria_video.png)
+![Diagrama de cuarto nivel — Memoria de video](diagramas/diagrama_cuarto_nivel_memoria_video.png)
 
 **Objetivo:** almacenar el contenido de las 300 casillas de la cuadrícula de video y resolver
 internamente la dirección de lectura a partir de la posición del haz.
@@ -1984,7 +1984,7 @@ coincidencia al leer por el puerto B en toda la cuadrícula, incluyendo las esqu
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador de color y RGB](fig/diagrama_cuarto_nivel_color_rgb.png)
+![Diagrama de cuarto nivel — Generador de color y RGB](diagramas/diagrama_cuarto_nivel_color_rgb.png)
 
 **Objetivo:** convertir la palabra leída de la memoria de video en los niveles físicos R/G/B,
 forzando negro durante el *blanking*.
@@ -2035,7 +2035,7 @@ el color esperado; confirmar que fuera de `video_on_i` la salida siempre es negr
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Condicionador de entradas de botones](fig/diagrama_cuarto_nivel_condicionador_entradas.png)
+![Diagrama de cuarto nivel — Condicionador de entradas de botones](diagramas/diagrama_cuarto_nivel_condicionador_entradas.png)
 
 **Objetivo:** convertir las 7 entradas físicas de botones en un registro confiable, libre de
 metaestabilidad y rebotes, legible por el CPU.
@@ -2088,7 +2088,7 @@ pulsación sostenida y verificar un único pulso de flanco.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Controlador de displays de 7 segmentos](fig/diagrama_cuarto_nivel_controlador_displays.png)
+![Diagrama de cuarto nivel — Controlador de displays de 7 segmentos](diagramas/diagrama_cuarto_nivel_controlador_displays.png)
 
 **Objetivo:** mostrar en 4 dígitos de 7 segmentos el contador acumulado de partidas ganadas de
 ambos jugadores (00–99 cada uno) mediante multiplexado.
@@ -2145,7 +2145,7 @@ parpadeo.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Registro del LED de estado](fig/diagrama_cuarto_nivel_registro_led.png)
+![Diagrama de cuarto nivel — Registro del LED de estado](diagramas/diagrama_cuarto_nivel_registro_led.png)
 
 **Objetivo:** exponer hacia el LED físico el estado actual del sistema (colocación, batalla,
 resultado).
@@ -2192,7 +2192,7 @@ validar en hardware el cambio visible en cada transición de fase.
 
 **Diagrama modular:**
 
-![Diagrama de cuarto nivel — Generador del buzzer](fig/diagrama_cuarto_nivel_generador_buzzer.png)
+![Diagrama de cuarto nivel — Generador del buzzer](diagramas/diagrama_cuarto_nivel_generador_buzzer.png)
 
 **Objetivo:** generar la retroalimentación sonora del juego (impacto, fallo, hundido,
 colocación inválida, victoria) a partir de una sola escritura del CPU, con duración
@@ -2422,7 +2422,7 @@ El objetivo del banco de registros es suministrar los operandos fuente
 | `RD1[31:0]` | 32 bits | Salida | Valor del registro `rs1`. |
 | `RD2[31:0]` | 32 bits | Salida | Valor del registro `rs2`. |
 
-![Diagrama de cuarto nivel del banco de registros.](fig/banco_registros.jpeg)
+![Diagrama de cuarto nivel del banco de registros.](diagramas/banco_registros.jpeg)
 
 #### Relación con los demás módulos
 
@@ -2529,7 +2529,7 @@ operandos `ALU_OperandA` y `ALU_OperandB` y del código de operación
 |---|---:|---|---|
 | `ALU_Result[31:0]` | 32 bits | Salida | Resultado de la operación seleccionada. |
 
-![Diagrama de cuarto nivel de la ALU.](fig/alu.jpeg)
+![Diagrama de cuarto nivel de la ALU.](diagramas/alu.jpeg)
 
 #### Relación con los demás módulos
 
@@ -2638,7 +2638,7 @@ indicado por `ImmSrc`: I, S, B o J.
 |---|---:|---|---|
 | `Imm[31:0]` | 32 bits | Salida | Inmediato extendido con signo. |
 
-![Diagrama de cuarto nivel del generador de inmediatos.](fig/generador_inmediatos.jpeg)
+![Diagrama de cuarto nivel del generador de inmediatos.](diagramas/generador_inmediatos.jpeg)
 
 #### Relación con los demás módulos
 
@@ -2729,7 +2729,7 @@ instrucción, qué debe hacer cada bloque del procesador en ese ciclo.
 | `JALR` | 1 bit | Salida | Distingue `jalr` de `jal`. |
 | `MemWrite` | 1 bit | Salida | Habilita la escritura en memoria de datos (`we_o`). |
 
-![Diagrama de cuarto nivel de la unidad de control.](fig/unidad_de_control.jpeg)
+![Diagrama de cuarto nivel de la unidad de control.](diagramas/unidad_de_control.jpeg)
 
 #### Relación con los demás módulos
 
@@ -2846,9 +2846,9 @@ si debe tomarse ese destino en lugar de `PC + 4`.
 | `TargetPC[31:0]` | 32 bits | Salida | Dirección de destino del branch o salto. |
 | `PCsrc` | 1 bit | Salida | Selección del `MUX Next PC`. |
 
-![Diagrama de cuarto nivel del comparador de bifurcaciones.](fig/comparador_bifuraciones.jpeg)
+![Diagrama de cuarto nivel del comparador de bifurcaciones.](diagramas/comparador_bifuraciones.jpeg)
 
-![Diagrama de cuarto nivel de la lógica de branch/saltos.](fig/logica_branch.jpeg)
+![Diagrama de cuarto nivel de la lógica de branch/saltos.](diagramas/logica_branch.jpeg)
 
 #### Relación con los demás módulos
 
@@ -3286,7 +3286,7 @@ RAM y a cada periférico.
 | `sel_VGA` | 1 bit | Salida | Selecciona la memoria de video. |
 | `we.RAM`, `we.UART`, `we.DISPLAY`, `we.LED`, `we.Buzzer`, `we.VGA` | 1 bit c/u | Salida | Habilitación de escritura de cada destino. |
 
-![Diagrama de cuarto nivel del decodificador de direcciones.](fig/decodificador_direcciones.jpeg)
+![Diagrama de cuarto nivel del decodificador de direcciones.](diagramas/decodificador_direcciones.jpeg)
 
 #### Relación con los demás módulos
 
