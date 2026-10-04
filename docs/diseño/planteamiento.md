@@ -404,41 +404,56 @@ niveles físicos `vga_r_o`/`vga_g_o`/`vga_b_o`, forzando negro cuando `video_on 
 
 
 ### 6.4 Periféricos locales
-El bloque de periféricos locales agrupa cuatro subsistemas independientes entre sí, todos
-mapeados en memoria y accedidos por el bus estándar de periféricos (`addr_i[1:0]`,
-`wdata_i[31:0]`, `we_i`, `rdata_o[31:0]`): entradas del Jugador 1, displays de 7 segmentos,
-LED de estado y buzzer.
- 
+
+El bloque de periféricos locales agrupa cuatro subsistemas: entradas del Jugador 1,
+displays de 7 segmentos, LED de estado y buzzer. La decodificación de direcciones MMIO
+se realiza externamente en el bloque de interconexión de P3. Por esta razón,
+`perifericos_locales` no recibe una dirección local; cada periférico recibe directamente
+su señal de escritura ya calificada y expone de forma independiente su dato de lectura
+hacia el multiplexor central.
+
 #### Señales de entrada
- 
+
 | Señal | Ancho | Origen | Descripción |
 |---|---|---|---|
 | `clk_i` | 1 bit | Externo | Reloj del sistema, 100 MHz. |
-| `rst_i` | 1 bit | Externo | Reinicio de los periféricos. |
-| `btn_raw_i[6:0]` | 7 bits | Botones físicos | Arriba, abajo, izquierda, derecha, SEL, OK, RST sin filtrar. |
-| `addr_i[1:0]` | 2 bits | CPU / decodificador MMIO | Selección de registro interno por periférico. |
-| `wdata_i[31:0]` | 32 bits | CPU / decodificador MMIO | Dato de escritura (displays, LED, buzzer). |
-| `we_i` | 1 bit | CPU / decodificador MMIO | Habilitación de escritura. |
- 
+| `rst_i` | 1 bit | Externo | Reinicio de los periféricos locales. |
+| `btn_raw_i[6:0]` | 7 bits | Botones físicos | Arriba, abajo, izquierda, derecha, SEL, OK y RST sin filtrar. |
+| `disp_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el display de 7 segmentos. |
+| `disp_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del display. |
+| `led_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el LED de estado. |
+| `led_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del LED. |
+| `buzz_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el buzzer. |
+| `buzz_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del buzzer. |
+
 #### Señales de salida
- 
+
 | Señal | Ancho | Destino | Descripción |
 |---|---|---|---|
-| `rdata_o[31:0]` | 32 bits | CPU / decodificador MMIO | Lectura del registro seleccionado. |
-| `seg_o[6:0]` | 7 bits | Displays físicos | Patrón de segmentos activos. |
-| `anode_o[3:0]` | 4 bits | Displays físicos | Ánodo del dígito actualmente encendido. |
-| `led_o[2:0]` | 3 bits | LED físico | Indicador de fase del juego. |
-| `buzz_pwm_o` | 1 bit | Buzzer físico | Señal PWM de audio. |
+| `rdata_input_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Estado procesado de los botones del Jugador 1. |
+| `rdata_display_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Valor almacenado en el registro del display. |
+| `rdata_led_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Valor almacenado en el registro del LED. |
+| `rdata_buzzer_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Estado y selección del buzzer. |
+| `seg_o[6:0]` | 7 bits | Displays físicos | Patrón de segmentos activo en bajo. |
+| `anode_o[3:0]` | 4 bits | Displays físicos | Selección de dígito activa en bajo. |
+| `led_o[2:0]` | 3 bits | LED físicos | Indicador de fase del juego. |
+| `buzz_pwm_o` | 1 bit | Buzzer físico | Señal de audio generada por el buzzer. |
+
  
 #### Explicación del bloque
  
-Las entradas físicas pasan por una cadena de sincronización, filtrado antirrebote y
-detección de flanco antes de quedar disponibles como pulsos en el registro de estado,
-leído por el CPU en `0x0001_0120`. Los displays de 7 segmentos reciben 4 dígitos BCD
-(`0x0001_0130`) y los multiplexan por persistencia de visión hacia `seg_o`/`anode_o`. El LED
-de estado (`0x0001_0138`) refleja directamente la fase actual del juego. El buzzer
-(`0x0001_0140`) recibe un código de tono y un disparo puntual, y genera de forma autónoma una
-señal PWM de duración fija sin requerir intervención continua del software.
+Las entradas físicas del Jugador 1 pasan por una cadena de sincronización, filtrado
+antirrebote y detección de flanco antes de quedar disponibles en `rdata_input_o`. Los
+displays de 7 segmentos almacenan cuatro dígitos BCD y los multiplexan por persistencia
+de visión hacia `seg_o` y `anode_o`. El registro de LED controla directamente los tres
+bits de `led_o`. El buzzer recibe un código de tono y un disparo puntual, y genera de
+forma autónoma la señal de audio correspondiente.
+
+Las direcciones MMIO (`0x0001_0120`, `0x0001_0130`, `0x0001_0138` y `0x0001_0140`)
+son decodificadas fuera de este módulo. El bloque de interconexión de P3 genera las
+señales `disp_we_i`, `led_we_i` y `buzz_we_i`, y selecciona posteriormente entre
+`rdata_input_o`, `rdata_display_o`, `rdata_led_o` y `rdata_buzzer_o` para devolver
+el dato correspondiente al CPU.
 
 ![Diagrama de tercer nivel del sistema1](diagramas/diagrama_tercer_nivel1.jpeg)
 
