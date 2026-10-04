@@ -3621,8 +3621,19 @@ Durante la integración con el programa en ensamblador se comprobará que
 las diferentes estructuras lógicas puedan actualizarse sin interferir
 entre sí.
 
-### 8.4 Interfaz estándar de periféricos
-Todos los periféricos de registro comparten la interfaz de 32 bits (`clk_i`, `rst_i`, `write_enable_i`, `addr_i[1:0]`, `wdata_i[31:0]`, `rdata_o[31:0]`). El VGA es la excepción: usa un campo de dirección más ancho por comportarse como memoria de video.
+### 8.4 Interfaz de periféricos
+
+Los periféricos se integran al espacio MMIO mediante el decodificador de direcciones
+central. Este bloque identifica la dirección solicitada por el CPU y genera una señal
+de selección o escritura específica para el periférico correspondiente. De esta forma,
+los periféricos que ocupan una única palabra no requieren recibir ni decodificar
+localmente la dirección completa.
+
+Las transferencias de datos se realizan mediante palabras de 32 bits. Cada periférico
+expone su dato de lectura hacia el multiplexor central, que selecciona la respuesta
+correspondiente según la dirección solicitada por el CPU. El VGA constituye un caso
+particular, ya que su memoria de video ocupa un rango de direcciones y utiliza un índice
+de 9 bits para seleccionar las posiciones de su ventana MMIO.
 
 ---
 
