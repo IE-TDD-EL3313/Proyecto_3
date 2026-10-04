@@ -58,18 +58,18 @@ module btn_input_tb;
     endtask
 
     task automatic press_clean(input int bit_idx, input string label);
-        int before, after;
+        int count_before, count_after;
         begin
-            before = pulse_count[bit_idx];
+            count_before = pulse_count[bit_idx];
             @(posedge clk_i);
             btn_raw_i[bit_idx] <= 1'b1;
             repeat (10) @(posedge clk_i);
-            after = pulse_count[bit_idx];
-            if (after - before == 1) begin
+            count_after = pulse_count[bit_idx];
+            if (count_after - count_before == 1) begin
                 $display("[PASS] %s: bit %0d genero exactamente 1 pulso", label, bit_idx);
             end else begin
                 $error("[FAIL] %s: bit %0d genero %0d pulso(s) (se esperaba 1)",
-                       label, bit_idx, after - before);
+                       label, bit_idx, count_after - count_before);
                 errors++;
             end
             @(posedge clk_i);
@@ -79,9 +79,9 @@ module btn_input_tb;
     endtask
 
     task automatic press_bouncy(input int bit_idx, input string label);
-        int before, after;
+        int count_before, count_after;
         begin
-            before = pulse_count[bit_idx];
+            count_before = pulse_count[bit_idx];
             // Simular varios rebotes mecanicos antes de asentarse en 1
             repeat (4) begin
                 @(posedge clk_i);
@@ -90,13 +90,13 @@ module btn_input_tb;
             @(posedge clk_i);
             btn_raw_i[bit_idx] <= 1'b1; // valor final estable
             repeat (10) @(posedge clk_i);
-            after = pulse_count[bit_idx];
-            if (after - before == 1) begin
+            count_after = pulse_count[bit_idx];
+            if (count_after - count_before == 1) begin
                 $display("[PASS] %s: rebotes filtrados, bit %0d genero exactamente 1 pulso",
                           label, bit_idx);
             end else begin
                 $error("[FAIL] %s: bit %0d genero %0d pulso(s) con rebotes (se esperaba 1)",
-                       label, bit_idx, after - before);
+                       label, bit_idx, count_after - count_before);
                 errors++;
             end
             @(posedge clk_i);
