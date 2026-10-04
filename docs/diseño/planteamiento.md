@@ -64,7 +64,7 @@ El diagrama de primer nivel representa el sistema completo de la FPGA como un ú
 | Señal | Descripción |
 |---|---|
 | `CLK` | Reloj principal de 100 MHz. |
-| `BTN_RST` | Reinicio general del sistema. |
+| `BTN_RST` | Solicitud de reinicio de la partida, procesada por software y conservando el contador de victorias. |
 | `arriba`, `abajo`, `izquierda`, `derecha` | Navegación del cursor del Jugador 1. |
 | `BTN_SEL` | Selección / rotación de barco. |
 | `BTN_OK` | Confirmación de colocación o disparo. |
