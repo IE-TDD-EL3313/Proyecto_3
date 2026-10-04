@@ -25,7 +25,7 @@ module vga_memory (
 
     // Puerto A: escritura síncrona a clk_i
     always_ff @(posedge clk_i) begin
-        if (vga_we_i)
+        if (vga_we_i && (vga_addr_i < NUM_TILES))
             mem[vga_addr_i] <= vga_wdata_i;
     end
 
@@ -40,7 +40,9 @@ module vga_memory (
 
     // Puerto B: lectura síncrona a clk_pix_i (latencia de 1 ciclo)
     always_ff @(posedge clk_pix_i) begin
-        tile_data_o <= mem[tile_addr];
+        if (tile_addr < NUM_TILES)
+            tile_data_o <= mem[tile_addr];
+        else
+            tile_data_o <= 32'b0;
     end
-
 endmodule

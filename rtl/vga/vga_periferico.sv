@@ -30,19 +30,25 @@ module vga_periferico (
     logic [9:0]  hcount, vcount;
     logic        video_on;
     logic [31:0] tile_data;
+    logic        video_on_d;
 
     assign rst_pix = rst_i | ~pll_locked;
 
-    // --- PLL ---
-    // NOTA: este es un placeholder. Reemplazar por la instancia real
-    // generada por el IP Wizard del proveedor (Xilinx Clocking Wizard /
-    // Intel PLL IP) configurado para 100 MHz -> 25 MHz. Los nombres de
-    // puerto deben ajustarse a los que genere esa herramienta.
+    // Compensación de la latencia de lectura de la memoria de video
+    always_ff @(posedge clk_pix) begin
+        if (rst_pix)
+            video_on_d <= 1'b0;
+        else
+            video_on_d <= video_on;
+    end
+
+    // --- Generador de reloj de píxel ---
+    // Clocking Wizard: 100 MHz -> 25 MHz
     clk_wiz_pixel u_pll (
-        .clk_i    (clk_i),
-        .rst_i    (rst_i),
-        .clk_pix_o(clk_pix),
-        .locked_o (pll_locked)
+        .clk_in1  (clk_i),
+        .reset    (rst_i),
+        .clk_out1 (clk_pix),
+        .locked   (pll_locked)
     );
 
     // --- Generador de temporización ---
@@ -71,7 +77,7 @@ module vga_periferico (
     // --- Generador de color y RGB ---
     vga_color_rgb u_color (
         .tile_data_i(tile_data),
-        .video_on_i (video_on),
+        .video_on_i (video_on_d),
         .r_o        (r_o),
         .g_o        (g_o),
         .b_o        (b_o)

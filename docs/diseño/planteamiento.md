@@ -64,7 +64,7 @@ El diagrama de primer nivel representa el sistema completo de la FPGA como un ú
 | Señal | Descripción |
 |---|---|
 | `CLK` | Reloj principal de 100 MHz. |
-| `BTN_RST` | Reinicio general del sistema. |
+| `BTN_RST` | Solicitud de reinicio de la partida, procesada por software y conservando el contador de victorias. |
 | `arriba`, `abajo`, `izquierda`, `derecha` | Navegación del cursor del Jugador 1. |
 | `BTN_SEL` | Selección / rotación de barco. |
 | `BTN_OK` | Confirmación de colocación o disparo. |
@@ -404,41 +404,56 @@ niveles físicos `vga_r_o`/`vga_g_o`/`vga_b_o`, forzando negro cuando `video_on 
 
 
 ### 6.4 Periféricos locales
-El bloque de periféricos locales agrupa cuatro subsistemas independientes entre sí, todos
-mapeados en memoria y accedidos por el bus estándar de periféricos (`addr_i[1:0]`,
-`wdata_i[31:0]`, `we_i`, `rdata_o[31:0]`): entradas del Jugador 1, displays de 7 segmentos,
-LED de estado y buzzer.
- 
+
+El bloque de periféricos locales agrupa cuatro subsistemas: entradas del Jugador 1,
+displays de 7 segmentos, LED de estado y buzzer. La decodificación de direcciones MMIO
+se realiza externamente en el bloque de interconexión de P3. Por esta razón,
+`perifericos_locales` no recibe una dirección local; cada periférico recibe directamente
+su señal de escritura ya calificada y expone de forma independiente su dato de lectura
+hacia el multiplexor central.
+
 #### Señales de entrada
- 
+
 | Señal | Ancho | Origen | Descripción |
 |---|---|---|---|
 | `clk_i` | 1 bit | Externo | Reloj del sistema, 100 MHz. |
-| `rst_i` | 1 bit | Externo | Reinicio de los periféricos. |
-| `btn_raw_i[6:0]` | 7 bits | Botones físicos | Arriba, abajo, izquierda, derecha, SEL, OK, RST sin filtrar. |
-| `addr_i[1:0]` | 2 bits | CPU / decodificador MMIO | Selección de registro interno por periférico. |
-| `wdata_i[31:0]` | 32 bits | CPU / decodificador MMIO | Dato de escritura (displays, LED, buzzer). |
-| `we_i` | 1 bit | CPU / decodificador MMIO | Habilitación de escritura. |
- 
+| `rst_i` | 1 bit | Externo | Reinicio de los periféricos locales. |
+| `btn_raw_i[6:0]` | 7 bits | Botones físicos | Arriba, abajo, izquierda, derecha, SEL, OK y RST sin filtrar. |
+| `disp_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el display de 7 segmentos. |
+| `disp_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del display. |
+| `led_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el LED de estado. |
+| `led_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del LED. |
+| `buzz_wdata_i[31:0]` | 32 bits | CPU / interconexión MMIO | Dato de escritura para el buzzer. |
+| `buzz_we_i` | 1 bit | Decodificador MMIO | Habilitación de escritura del buzzer. |
+
 #### Señales de salida
- 
+
 | Señal | Ancho | Destino | Descripción |
 |---|---|---|---|
-| `rdata_o[31:0]` | 32 bits | CPU / decodificador MMIO | Lectura del registro seleccionado. |
-| `seg_o[6:0]` | 7 bits | Displays físicos | Patrón de segmentos activos. |
-| `anode_o[3:0]` | 4 bits | Displays físicos | Ánodo del dígito actualmente encendido. |
-| `led_o[2:0]` | 3 bits | LED físico | Indicador de fase del juego. |
-| `buzz_pwm_o` | 1 bit | Buzzer físico | Señal PWM de audio. |
+| `rdata_input_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Estado procesado de los botones del Jugador 1. |
+| `rdata_display_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Valor almacenado en el registro del display. |
+| `rdata_led_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Valor almacenado en el registro del LED. |
+| `rdata_buzzer_o[31:0]` | 32 bits | Multiplexor de lectura MMIO | Estado y selección del buzzer. |
+| `seg_o[6:0]` | 7 bits | Displays físicos | Patrón de segmentos activo en bajo. |
+| `anode_o[3:0]` | 4 bits | Displays físicos | Selección de dígito activa en bajo. |
+| `led_o[2:0]` | 3 bits | LED físicos | Indicador de fase del juego. |
+| `buzz_pwm_o` | 1 bit | Buzzer físico | Señal de audio generada por el buzzer. |
+
  
 #### Explicación del bloque
  
-Las entradas físicas pasan por una cadena de sincronización, filtrado antirrebote y
-detección de flanco antes de quedar disponibles como pulsos en el registro de estado,
-leído por el CPU en `0x0001_0120`. Los displays de 7 segmentos reciben 4 dígitos BCD
-(`0x0001_0130`) y los multiplexan por persistencia de visión hacia `seg_o`/`anode_o`. El LED
-de estado (`0x0001_0138`) refleja directamente la fase actual del juego. El buzzer
-(`0x0001_0140`) recibe un código de tono y un disparo puntual, y genera de forma autónoma una
-señal PWM de duración fija sin requerir intervención continua del software.
+Las entradas físicas del Jugador 1 pasan por una cadena de sincronización, filtrado
+antirrebote y detección de flanco antes de quedar disponibles en `rdata_input_o`. Los
+displays de 7 segmentos almacenan cuatro dígitos BCD y los multiplexan por persistencia
+de visión hacia `seg_o` y `anode_o`. El registro de LED controla directamente los tres
+bits de `led_o`. El buzzer recibe un código de tono y un disparo puntual, y genera de
+forma autónoma la señal de audio correspondiente.
+
+Las direcciones MMIO (`0x0001_0120`, `0x0001_0130`, `0x0001_0138` y `0x0001_0140`)
+son decodificadas fuera de este módulo. El bloque de interconexión de P3 genera las
+señales `disp_we_i`, `led_we_i` y `buzz_we_i`, y selecciona posteriormente entre
+`rdata_input_o`, `rdata_display_o`, `rdata_led_o` y `rdata_buzzer_o` para devolver
+el dato correspondiente al CPU.
 
 ![Diagrama de tercer nivel del sistema1](diagramas/diagrama_tercer_nivel1.jpeg)
 
@@ -1964,16 +1979,28 @@ tile) se resuelve tomando los bits superiores de `hcount`/`vcount` por ser 32 po
 tile_col = hcount_i[9:5]
 tile_row = vcount_i[9:5]
 tile_addr = tile_row*20 + tile_col
-on posedge clk_i:     if (vga_we_i): mem[vga_addr_i] <= vga_wdata_i
-on posedge clk_pix_i: tile_data_o <= mem[tile_addr]
+
+on posedge clk_i:
+    if (vga_we_i AND vga_addr_i < 300):
+        mem[vga_addr_i] <= vga_wdata_i
+
+on posedge clk_pix_i:
+    if (tile_addr < 300):
+        tile_data_o <= mem[tile_addr]
+    else:
+        tile_data_o <= 0
 ```
 
 **Comportamiento durante el reset:** no se limpia por hardware (según el enunciado); la
 inicialización del contenido es responsabilidad del software.
 
-**Casos especiales y condiciones de borde:** direcciones fuera de rango durante *blanking*
-(se ignoran porque `video_on_o=0` fuerza negro aguas abajo); colisión de puerto en la misma
-dirección (no crítico, imperceptible a 60 Hz); latencia de lectura de un ciclo.
+**Casos especiales y condiciones de borde:** la memoria física contiene 300 palabras,
+correspondientes a las 20×15 casillas visibles. Las escrituras con dirección mayor o igual
+a 300 se ignoran y las lecturas fuera de este rango entregan cero. La lectura del puerto
+de video es síncrona y presenta una latencia de un ciclo de `clk_pix_i`; por ello,
+`vga_periferico` retrasa `video_on` un ciclo antes de entregarlo al generador de color,
+manteniendo alineada la habilitación de video con `tile_data_o`. Una eventual colisión de
+puertos sobre la misma dirección no es crítica para la visualización.
 
 **Estrategia de validación:** escribir un patrón conocido por el puerto A y verificar
 coincidencia al leer por el puerto B en toda la cuadrícula, incluyendo las esquinas.
@@ -2101,8 +2128,8 @@ ambos jugadores (00–99 cada uno) mediante multiplexado.
 | `rst_i` | 1 bit | Entrada | Reset del módulo. |
 | `wdata_i` | 32 bits | Entrada | 4 dígitos BCD (`0x0001_0130`). |
 | `we_i` | 1 bit | Entrada | Habilitación de escritura. |
-| `seg_o` | 7 bits | Salida | Patrón de segmentos activos. |
-| `anode_o` | 4 bits | Salida | Ánodo del dígito activo. |
+| `seg_o` | 7 bits | Salida | Patrón de segmentos activo en bajo. |
+| `anode_o` | 4 bits | Salida | Selección de dígito activa en bajo. |
 
 **Relación con los demás módulos:** módulo hoja; recibe datos del CPU vía bus de periféricos.
 
@@ -2114,20 +2141,28 @@ persistencia de visión.
 divisor/módulo por 10 en hardware. Se usa tabla de consulta para el decodificador de 7
 segmentos por no seguir un patrón aritmético simple.
 
-**Tabla de verdad del decodificador (`seg_o[gfedcba]`):**
+**Tabla de verdad del decodificador (`seg_o[gfedcba]`, activo en bajo):**
 
-| Dígito | `seg_o` |
+La tarjeta Nexys 4 utiliza lógica activa en bajo tanto para los segmentos como para
+la selección de los ánodos. Por tanto, un `0` lógico en `seg_o` enciende el segmento
+correspondiente y un `0` lógico en `anode_o` habilita el dígito seleccionado.
+
+| Dígito | `seg_o[gfedcba]` |
 |---|---|
-| 0 | `0111111` |
-| 1 | `0000110` |
-| 2 | `1011011` |
-| 3 | `1001111` |
-| 4 | `1100110` |
-| 5 | `1101101` |
-| 6 | `1111101` |
-| 7 | `0000111` |
-| 8 | `1111111` |
-| 9 | `1101111` |
+| 0 | `1000000` |
+| 1 | `1111001` |
+| 2 | `0100100` |
+| 3 | `0110000` |
+| 4 | `0011001` |
+| 5 | `0010010` |
+| 6 | `0000010` |
+| 7 | `1111000` |
+| 8 | `0000000` |
+| 9 | `0010000` |
+
+La selección de dígitos también es activa en bajo. Durante el multiplexado se
+mantienen los ánodos no seleccionados en `1` y únicamente el ánodo correspondiente
+al dígito activo se lleva a `0`.
 
 **Comportamiento durante el reset:** `wdata` almacenado se fuerza a 0 (displays en "00 00");
 el recorrido de refresco reinicia desde el dígito 0.
@@ -3586,8 +3621,19 @@ Durante la integración con el programa en ensamblador se comprobará que
 las diferentes estructuras lógicas puedan actualizarse sin interferir
 entre sí.
 
-### 8.4 Interfaz estándar de periféricos
-Todos los periféricos de registro comparten la interfaz de 32 bits (`clk_i`, `rst_i`, `write_enable_i`, `addr_i[1:0]`, `wdata_i[31:0]`, `rdata_o[31:0]`). El VGA es la excepción: usa un campo de dirección más ancho por comportarse como memoria de video.
+### 8.4 Interfaz de periféricos
+
+Los periféricos se integran al espacio MMIO mediante el decodificador de direcciones
+central. Este bloque identifica la dirección solicitada por el CPU y genera una señal
+de selección o escritura específica para el periférico correspondiente. De esta forma,
+los periféricos que ocupan una única palabra no requieren recibir ni decodificar
+localmente la dirección completa.
+
+Las transferencias de datos se realizan mediante palabras de 32 bits. Cada periférico
+expone su dato de lectura hacia el multiplexor central, que selecciona la respuesta
+correspondiente según la dirección solicitada por el CPU. El VGA constituye un caso
+particular, ya que su memoria de video ocupa un rango de direcciones y utiliza un índice
+de 9 bits para seleccionar las posiciones de su ventana MMIO.
 
 ---
 
