@@ -79,7 +79,17 @@ module buzzer_gen #(
     endfunction
 
     function automatic logic [DIV_WIDTH-1:0] freq_to_div(input logic [15:0] freq_hz);
-        return CLK_FREQ_HZ / (2 * freq_hz);
+        unique case (freq_hz)
+            16'd100: freq_to_div = CLK_FREQ_HZ / 200;
+            16'd150: freq_to_div = CLK_FREQ_HZ / 300;
+            16'd200: freq_to_div = CLK_FREQ_HZ / 400;
+            16'd300: freq_to_div = CLK_FREQ_HZ / 600;
+            16'd400: freq_to_div = CLK_FREQ_HZ / 800;
+            16'd450: freq_to_div = CLK_FREQ_HZ / 900;
+            16'd500: freq_to_div = CLK_FREQ_HZ / 1000;
+            16'd600: freq_to_div = CLK_FREQ_HZ / 1200;
+            default: freq_to_div = CLK_FREQ_HZ / 400;
+        endcase
     endfunction
 
     function automatic logic [DUR_WIDTH-1:0] ms_to_cycles(input logic [15:0] duration_ms);
