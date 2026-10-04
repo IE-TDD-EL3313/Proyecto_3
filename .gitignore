@@ -1,0 +1,21 @@
+# Vivado - archivos generados
+.Xil/
+*.jou
+*.log
+*.str
+
+*.cache/
+*.gen/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+
+# Proyecto local de Vivado
+*.xpr
+
+# Archivos de visualización
+nlviewcommon.logfile
+
+# Estructura local del proyecto Vivado
+*.srcs/
