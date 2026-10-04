@@ -19,3 +19,6 @@ nlviewcommon.logfile
 
 # Estructura local del proyecto Vivado
 *.srcs/
+
+# Vivado/XSim - archivos temporales de simulación
+*.pb
