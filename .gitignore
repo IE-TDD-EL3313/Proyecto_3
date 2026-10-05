@@ -26,3 +26,10 @@ nlviewcommon.logfile
 # Python - archivos generados
 __pycache__/
 *.py[cod]
+
+# Vivado / XSim
+xsim.dir/
+*.jou
+*.log
+*.pb
+*.wdb
