@@ -22,3 +22,7 @@ nlviewcommon.logfile
 
 # Vivado/XSim - archivos temporales de simulación
 *.pb
+
+# Python - archivos generados
+__pycache__/
+*.py[cod]
