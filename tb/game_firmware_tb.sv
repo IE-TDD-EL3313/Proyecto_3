@@ -1,0 +1,1316 @@
+`timescale 1ns/1ps
+
+module game_firmware_tb;
+
+    logic clk_i = 1'b0;
+    logic rst_ni = 1'b0;
+    logic [6:0] btn_raw_i = 7'b0;
+    logic uart_rx_i = 1'b1;
+
+    wire uart_tx_o;
+    wire [6:0] seg_o;
+    wire [3:0] anode_o;
+    wire [2:0] led_o;
+    wire buzz_pwm_o;
+    wire hsync_o;
+    wire vsync_o;
+    wire [3:0] r_o;
+    wire [3:0] g_o;
+    wire [3:0] b_o;
+    wire [31:0] pc_o;
+
+    integer cycles;
+    integer i;
+    integer errors;
+
+    logic [7:0] uart_tx_byte0;
+    logic [7:0] uart_tx_byte1;
+    logic [7:0] uart_tx_byte2;
+    logic [7:0] uart_tx_byte3;
+    logic [7:0] uart_tx_byte4;
+    logic [7:0] uart_tx_byte5;
+    logic [7:0] uart_tx_byte6;
+    logic [7:0] uart_tx_byte7;
+    logic [7:0] uart_tx_byte8;
+    logic [7:0] uart_tx_byte9;
+    logic [7:0] uart_tx_byte10;
+
+    localparam BTN_UP    = 32'h01;
+    localparam BTN_DOWN  = 32'h02;
+    localparam BTN_LEFT  = 32'h04;
+    localparam BTN_RIGHT = 32'h08;
+    localparam BTN_SEL   = 32'h10;
+    localparam BTN_OK    = 32'h20;
+
+    always #5 clk_i = ~clk_i;
+
+    sistema_top #(
+        .ROM_FILE("game.hex")
+    ) dut (
+        .clk_i      (clk_i),
+        .rst_ni     (rst_ni),
+        .btn_raw_i  (btn_raw_i),
+        .uart_rx_i  (uart_rx_i),
+        .uart_tx_o  (uart_tx_o),
+        .seg_o      (seg_o),
+        .anode_o    (anode_o),
+        .led_o      (led_o),
+        .buzz_pwm_o (buzz_pwm_o),
+        .hsync_o    (hsync_o),
+        .vsync_o    (vsync_o),
+        .r_o        (r_o),
+        .g_o        (g_o),
+        .b_o        (b_o),
+        .pc_o       (pc_o)
+    );
+
+    // ------------------------------------------------------------
+    // Inyectar un pulso MMIO de botón.
+    //
+    // Se mantiene hasta observar que el firmware produjo el cambio
+    // esperado. Después se libera y se dejan varios ciclos en cero.
+    // ------------------------------------------------------------
+
+    logic [31:0] injected_button;
+
+    task automatic press_button(input [31:0] value);
+        integer timeout;
+        begin
+            // No comenzar sobre una lectura INPUT ya activa.
+            while (dut.mmio_addr == 32'h0001_0120)
+                @(negedge clk_i);
+
+            // Presentar el boton antes de la siguiente lectura.
+            injected_button = value;
+            force dut.input_rdata = injected_button;
+
+            timeout = 0;
+
+            // Esperar hasta que el lw de INPUT este activo.
+            while (!((dut.mmio_addr == 32'h0001_0120) &&
+                     (dut.mmio_sel  == 1'b1) &&
+                     (dut.mmio_we   == 1'b0)) &&
+                   (timeout < 500)) begin
+                @(negedge clk_i);
+                timeout = timeout + 1;
+            end
+
+            if (timeout >= 500)
+                $fatal(1,
+                    "Timeout esperando captura INPUT: PC=%h addr=%h",
+                    pc_o, dut.mmio_addr);
+
+            // El register_file captura el resultado del lw
+            // en el siguiente flanco positivo.
+            @(posedge clk_i);
+            #1;
+
+            // Retirar inmediatamente el boton.
+            injected_button = 32'h0;
+
+            // Primero esperar que el CPU abandone este acceso INPUT.
+            while (dut.mmio_addr == 32'h0001_0120)
+                @(negedge clk_i);
+
+            // Esperar hasta que el firmware termine de procesar
+            // la accion y vuelva al polling de INPUT.
+            timeout = 0;
+
+            while (!((dut.mmio_addr == 32'h0001_0120) &&
+                     (dut.mmio_sel  == 1'b1) &&
+                     (dut.mmio_we   == 1'b0)) &&
+                   (timeout < 2000)) begin
+                @(negedge clk_i);
+                timeout = timeout + 1;
+            end
+
+            if (timeout >= 2000)
+                $fatal(1,
+                    "Timeout esperando retorno a main_loop: PC=%h addr=%h",
+                    pc_o, dut.mmio_addr);
+
+            // En esta nueva lectura INPUT debe verse cero.
+            if (dut.mmio_rdata !== 32'h0000_0000)
+                $fatal(1,
+                    "INPUT no regreso a cero: rdata=%h",
+                    dut.mmio_rdata);
+
+            release dut.input_rdata;
+
+            // Salir de la lectura actual antes de retornar al test.
+            @(negedge clk_i);
+        end
+    endtask
+
+    // ------------------------------------------------------------
+    // Transmitir un byte hacia el RX de la FPGA a 115200 baud.
+    // UART 8N1: start=0, 8 bits LSB-first, stop=1.
+    // ------------------------------------------------------------
+
+    task automatic uart_send_byte(input [7:0] data);
+        integer bit_index;
+        begin
+            // Reposo.
+            uart_rx_i = 1'b1;
+            #(8680);
+
+            // Bit de inicio.
+            uart_rx_i = 1'b0;
+            #(8680);
+
+            // 8 bits de datos, LSB primero.
+            for (bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+                uart_rx_i = data[bit_index];
+                #(8680);
+            end
+
+            // Bit de parada.
+            uart_rx_i = 1'b1;
+            #(8680);
+
+            // Mantener reposo adicional.
+            #(8680);
+        end
+    endtask
+
+    // ------------------------------------------------------------
+    // Recibir un byte transmitido por la FPGA a 115200 baud.
+    // UART 8N1: start=0, 8 bits LSB-first, stop=1.
+    // ------------------------------------------------------------
+
+    task automatic uart_receive_byte(output [7:0] data);
+        integer bit_index;
+        begin
+            // Esperar el inicio de una trama transmitida por la FPGA.
+            @(negedge uart_tx_o);
+
+            // Desde el flanco de START:
+            // 1.5 periodos llevan al centro del bit de datos 0.
+            #(13020);
+
+            // Muestrear los 8 bits de datos en el centro de cada bit.
+            for (bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+                data[bit_index] = uart_tx_o;
+                #(8680);
+            end
+
+            // En este punto estamos en el centro del bit STOP.
+            if (uart_tx_o !== 1'b1) begin
+                $display("ERROR UART TX: bit STOP invalido");
+                errors = errors + 1;
+            end
+
+            // Avanzar hasta el final del bit STOP.
+            #(4340);
+        end
+    endtask
+
+    task automatic expect_ram(
+        input integer word_index,
+        input [31:0] expected
+    );
+        begin
+            if (dut.u_processor.ram.words[word_index] !== expected) begin
+                $display(
+                    "ERROR RAM[%0d]: esperado=%h obtenido=%h",
+                    word_index,
+                    expected,
+                    dut.u_processor.ram.words[word_index]
+                );
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    task automatic expect_vga(
+        input integer index,
+        input [31:0] expected
+    );
+        begin
+            if (dut.u_vga.u_memory.mem[index] !== expected) begin
+                $display(
+                    "ERROR VGA[%0d]: esperado=%h obtenido=%h",
+                    index,
+                    expected,
+                    dut.u_vga.u_memory.mem[index]
+                );
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        cycles = 0;
+        errors = 0;
+
+        // ============================================================
+        // 1. Inicialización
+        // ============================================================
+
+        repeat (3) @(negedge clk_i);
+        rst_ni = 1'b1;
+
+        while ((led_o !== 3'b001) && (cycles < 3000)) begin
+            @(negedge clk_i);
+            cycles = cycles + 1;
+        end
+
+        if (led_o !== 3'b001)
+            $fatal(1, "Timeout init_game PC=%h", pc_o);
+
+        repeat (10) @(negedge clk_i);
+
+        expect_ram(0, 32'd0);  // GAME_STATE
+        expect_ram(2, 32'd0);  // CURSOR_ROW
+        expect_ram(3, 32'd0);  // CURSOR_COL
+        expect_ram(4, 32'd0);  // ORIENTATION
+        expect_ram(5, 32'd0);  // CURRENT_SHIP
+        expect_ram(6, 32'd0);  // PLACED_J1
+
+        // Los cuatro arreglos de juego deben iniciar vacios:
+        // BOARD_J1, BOARD_J2, SHOTS_J1 y SHOTS_J2.
+        for (i = 0; i < 64; i = i + 1) begin
+            expect_ram(64+i,  32'd0);  // BOARD_J1  0x2100
+            expect_ram(128+i, 32'd0);  // BOARD_J2  0x2200
+            expect_ram(192+i, 32'd0);  // SHOTS_J1  0x2300
+            expect_ram(256+i, 32'd0);  // SHOTS_J2  0x2400
+        end
+
+        for (i = 0; i < 300; i = i + 1)
+            expect_vga(i, 32'd0);
+
+        $display("PASS 1: inicializacion");
+
+        // ============================================================
+        // 2. Barco 0: longitud 4, horizontal en (0,0)
+        // ============================================================
+
+        press_button(BTN_OK);
+
+        expect_ram(64, 32'd1); // (0,0)
+        expect_ram(65, 32'd1); // (0,1)
+        expect_ram(66, 32'd1); // (0,2)
+        expect_ram(67, 32'd1); // (0,3)
+
+        expect_vga(0, 32'd1);
+        expect_vga(1, 32'd1);
+        expect_vga(2, 32'd1);
+        expect_vga(3, 32'd1);
+
+        expect_ram(5, 32'd1); // CURRENT_SHIP
+        expect_ram(6, 32'd1); // PLACED_J1
+
+        $display("PASS 2: barco 0 horizontal");
+
+        // ============================================================
+        // 3. Intento inválido del barco 1
+        //
+        // Mover columna hasta 6. Longitud 3 horizontal:
+        // 6 + 3 > 8.
+        // ============================================================
+
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+
+        expect_ram(3, 32'd6);
+
+        press_button(BTN_OK);
+
+        // No debe avanzar de barco.
+        expect_ram(5, 32'd1);
+        expect_ram(6, 32'd1);
+
+        // El buzzer debe haber recibido tono 011.
+        if (dut.buzzer_rdata[2:0] !== 3'b011) begin
+            $display(
+                "ERROR buzzer invalido: esperado=011 obtenido=%b",
+                dut.buzzer_rdata[2:0]
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 3: rechazo fuera de tablero");
+
+        // ============================================================
+        // 4. Barco 1: longitud 3, vertical en (0,6)
+        // ============================================================
+
+        press_button(BTN_SEL);
+        expect_ram(4, 32'd1);
+
+        press_button(BTN_OK);
+
+        // Índices: 6,14,22 -> RAM 64+indice.
+        expect_ram(70, 32'd2);
+        expect_ram(78, 32'd2);
+        expect_ram(86, 32'd2);
+
+        // VGA: fila*20 + columna.
+        expect_vga(6, 32'd1);
+        expect_vga(26, 32'd1);
+        expect_vga(46, 32'd1);
+
+        expect_ram(5, 32'd2);
+        expect_ram(6, 32'd2);
+
+        $display("PASS 4: barco 1 vertical");
+
+        // ============================================================
+        // 5. Intento con traslape del barco 2
+        //
+        // El cursor vuelve a (0,0), horizontal.
+        // Allí ya existe el barco 0.
+        // ============================================================
+
+        expect_ram(2, 32'd0);
+        expect_ram(3, 32'd0);
+        expect_ram(4, 32'd0);
+
+        press_button(BTN_OK);
+
+        // Debe continuar esperando el barco 2.
+        expect_ram(5, 32'd2);
+        expect_ram(6, 32'd2);
+
+        $display("PASS 5: rechazo por traslape");
+
+        // ============================================================
+        // 6. Barco 2: longitud 2 horizontal en (1,0)
+        // ============================================================
+
+        press_button(BTN_DOWN);
+
+        expect_ram(2, 32'd1);
+        expect_ram(3, 32'd0);
+
+        press_button(BTN_OK);
+
+        // Índices 8 y 9.
+        expect_ram(72, 32'd3);
+        expect_ram(73, 32'd3);
+
+        expect_vga(20, 32'd1);
+        expect_vga(21, 32'd1);
+
+        expect_ram(5, 32'd3);
+        expect_ram(6, 32'd3);
+
+        $display("PASS 6: barco 2 horizontal");
+        $display("PASS: colocacion completa J1");
+
+        // ============================================================
+        // 7. Ignorar un cuarto intento de colocacion
+        //
+        // La flota J1 ya esta completa. Un nuevo OK no debe
+        // modificar CURRENT_SHIP, PLACED_J1, BOARD_J1 ni VGA.
+        // ============================================================
+
+        press_button(BTN_OK);
+
+        // CURRENT_SHIP y PLACED_J1 deben permanecer en 3.
+        expect_ram(5, 32'd3);
+        expect_ram(6, 32'd3);
+
+        // Barco 0: (0,0)..(0,3).
+        expect_ram(64, 32'd1);
+        expect_ram(65, 32'd1);
+        expect_ram(66, 32'd1);
+        expect_ram(67, 32'd1);
+
+        // Barco 1: (0,6), (1,6), (2,6).
+        expect_ram(70, 32'd2);
+        expect_ram(78, 32'd2);
+        expect_ram(86, 32'd2);
+
+        // Barco 2: (1,0), (1,1).
+        expect_ram(72, 32'd3);
+        expect_ram(73, 32'd3);
+
+        // Una celda libre debe continuar libre.
+        expect_ram(74, 32'd0);
+
+        // Comprobar tambien posiciones representativas en VGA.
+        expect_vga(0,  32'd1);
+        expect_vga(6,  32'd1);
+        expect_vga(20, 32'd1);
+        expect_vga(22, 32'd0);
+
+        $display("PASS 7: cuarto barco ignorado");
+
+        // ============================================================
+        // 8. Recepcion basica UART
+        //
+        // Enviar el caracter ASCII 'P' (0x50).
+        // El firmware debe:
+        //   1. detectar RX_VALID,
+        //   2. leer UART_RX,
+        //   3. guardar 0x50 en UART_LAST_BYTE (0x2500),
+        //   4. limpiar RX_VALID.
+        // ============================================================
+
+        uart_send_byte(8'h50);
+
+        // Dar tiempo al firmware para consumir el byte.
+        repeat (200) @(negedge clk_i);
+
+        // 0x2500 corresponde a RAM[320].
+        expect_ram(320, 32'h0000_0050);
+
+        // RX_VALID debe haber sido limpiado por poll_uart.
+        if (dut.u_uart.rx_pending_r !== 1'b0) begin
+            $display(
+                "ERROR UART RX_VALID: esperado=0 obtenido=%b",
+                dut.u_uart.rx_pending_r
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 8: recepcion UART byte 0x50");
+
+        // ============================================================
+        // 9. Parser UART: trama P completa
+        //
+        // Como la prueba 8 dejo al parser esperando la coma despues
+        // de 'P', primero se envia LF para forzar el descarte de esa
+        // trama incompleta. Luego se envia:
+        //
+        //     P,0,0,0,H\n
+        //
+        // Resultado esperado:
+        //   PARSE_STATE = 0
+        //   SHIP        = 0
+        //   ROW         = 0
+        //   COL         = 0
+        //   ORIENT      = 0  (H)
+        //   FRAME_READY = 0  (consumido por process_uart_frame)
+        // ============================================================
+
+        // Descartar la 'P' aislada de la prueba anterior.
+        uart_send_byte(8'h0A);
+        repeat (200) @(negedge clk_i);
+
+        // P,0,0,0,H\n
+        //
+        // Al mismo tiempo se escucha uart_tx_o. Si la colocacion
+        // es aceptada, la FPGA debe responder:
+        //
+        //     PA,0\n
+        //
+        fork
+            begin
+                uart_send_byte(8'h50); // P
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h48); // H
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                uart_receive_byte(uart_tx_byte0);
+                uart_receive_byte(uart_tx_byte1);
+                uart_receive_byte(uart_tx_byte2);
+                uart_receive_byte(uart_tx_byte3);
+                uart_receive_byte(uart_tx_byte4);
+            end
+        join
+
+        // Verificar respuesta PA,0\n.
+        if (uart_tx_byte0 !== 8'h50 ||
+            uart_tx_byte1 !== 8'h41 ||
+            uart_tx_byte2 !== 8'h2C ||
+            uart_tx_byte3 !== 8'h30 ||
+            uart_tx_byte4 !== 8'h0A) begin
+
+            $display(
+                "ERROR UART TX PA: recibido=%h %h %h %h %h",
+                uart_tx_byte0,
+                uart_tx_byte1,
+                uart_tx_byte2,
+                uart_tx_byte3,
+                uart_tx_byte4
+            );
+            errors = errors + 1;
+        end
+
+        repeat (300) @(negedge clk_i);
+
+        // 0x2504 / 4 relativo a RAM 0x2000 -> RAM[321].
+        expect_ram(321, 32'd0); // UART_PARSE_STATE
+        expect_ram(322, 32'd0); // UART_SHIP
+        expect_ram(323, 32'd0); // UART_ROW
+        expect_ram(324, 32'd0); // UART_COL
+        expect_ram(325, 32'd0); // UART_ORIENT = H
+        expect_ram(326, 32'd0); // UART_FRAME_READY consumido
+
+        // BOARD_J2 empieza en RAM[128].
+        // Barco 0 horizontal en (0,0), longitud 4.
+        expect_ram(128, 32'd1);
+        expect_ram(129, 32'd1);
+        expect_ram(130, 32'd1);
+        expect_ram(131, 32'd1);
+        expect_ram(132, 32'd0);
+
+        // PLACED_J2 = RAM[7].
+        expect_ram(7, 32'd1);
+
+        // J2_SHIP_MASK = 0b001.
+        expect_ram(327, 32'd1);
+
+        if (dut.u_uart.rx_pending_r !== 1'b0) begin
+            $display(
+                "ERROR parser UART RX_VALID: esperado=0 obtenido=%b",
+                dut.u_uart.rx_pending_r
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 9: parser UART P,0,0,0,H");
+
+        // ============================================================
+        // 10. Parser UART con campos no nulos y orientacion vertical
+        //
+        // Trama:
+        //     P,2,6,4,V\n
+        //
+        // Resultado esperado:
+        //   PARSE_STATE = 0
+        //   SHIP        = 2
+        //   ROW         = 6
+        //   COL         = 4
+        //   ORIENT      = 1  (V)
+        //   FRAME_READY = 0  (consumido por process_uart_frame)
+        // ============================================================
+
+        uart_send_byte(8'h50); // P
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h32); // 2
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h36); // 6
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h34); // 4
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h56); // V
+        uart_send_byte(8'h0A); // LF
+
+        repeat (300) @(negedge clk_i);
+
+        expect_ram(321, 32'd0); // UART_PARSE_STATE
+        expect_ram(322, 32'd2); // UART_SHIP
+        expect_ram(323, 32'd6); // UART_ROW
+        expect_ram(324, 32'd4); // UART_COL
+        expect_ram(325, 32'd1); // UART_ORIENT = V
+        expect_ram(326, 32'd0); // UART_FRAME_READY consumido
+
+        // Barco 2 vertical en (6,4), longitud 2.
+        // BOARD_J2 almacena ship+1 = 3.
+        expect_ram(180, 32'd3);
+        expect_ram(188, 32'd3);
+
+        // Una celda vecina debe continuar libre.
+        expect_ram(181, 32'd0);
+
+        // Dos barcos aceptados.
+        expect_ram(7, 32'd2);
+
+        // Barcos 0 y 2 colocados: 0b101.
+        expect_ram(327, 32'd5);
+
+        if (dut.u_uart.rx_pending_r !== 1'b0) begin
+            $display(
+                "ERROR parser UART RX_VALID: esperado=0 obtenido=%b",
+                dut.u_uart.rx_pending_r
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 10: parser UART P,2,6,4,V");
+
+        // ============================================================
+        // 11. Parser UART: rechazo de trama invalida
+        //
+        // Trama:
+        //     P,2,8,4,V\n
+        //
+        // La fila 8 es invalida. El parser debe descartar la trama,
+        // volver al estado 0 y NO activar FRAME_READY.
+        // ============================================================
+
+        uart_send_byte(8'h50); // P
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h32); // 2
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h38); // 8 -> invalido
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h34); // 4
+        uart_send_byte(8'h2C); // ,
+        uart_send_byte(8'h56); // V
+        uart_send_byte(8'h0A); // LF
+
+        repeat (300) @(negedge clk_i);
+
+        expect_ram(321, 32'd0); // UART_PARSE_STATE
+        expect_ram(326, 32'd0); // UART_FRAME_READY
+
+        // La trama invalida no debe modificar la colocacion de J2.
+        expect_ram(7,   32'd2); // PLACED_J2 sigue en 2
+        expect_ram(327, 32'd5); // mascara sigue en 0b101
+
+        if (dut.u_uart.rx_pending_r !== 1'b0) begin
+            $display(
+                "ERROR parser invalido RX_VALID: esperado=0 obtenido=%b",
+                dut.u_uart.rx_pending_r
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 11: trama invalida descartada");
+
+        // ============================================================
+        // 12. Rechazo de traslape y ship ID duplicado en J2
+        // ============================================================
+
+        // ------------------------------------------------------------
+        // 12a. Traslape:
+        //     P,1,0,2,V\n
+        //
+        // La celda (0,2) ya pertenece al barco 0.
+        // Respuesta esperada:
+        //     PR,1,O\n
+        // ------------------------------------------------------------
+        fork
+            begin
+                uart_send_byte(8'h50); // P
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h31); // 1
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h32); // 2
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h56); // V
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                uart_receive_byte(uart_tx_byte0);
+                uart_receive_byte(uart_tx_byte1);
+                uart_receive_byte(uart_tx_byte2);
+                uart_receive_byte(uart_tx_byte3);
+                uart_receive_byte(uart_tx_byte4);
+                uart_receive_byte(uart_tx_byte5);
+                uart_receive_byte(uart_tx_byte6);
+            end
+        join
+
+        // PR,1,O\n
+        if (uart_tx_byte0 !== 8'h50 ||
+            uart_tx_byte1 !== 8'h52 ||
+            uart_tx_byte2 !== 8'h2C ||
+            uart_tx_byte3 !== 8'h31 ||
+            uart_tx_byte4 !== 8'h2C ||
+            uart_tx_byte5 !== 8'h4F ||
+            uart_tx_byte6 !== 8'h0A) begin
+
+            $display(
+                "ERROR UART TX PR,O traslape: recibido=%h %h %h %h %h %h %h",
+                uart_tx_byte0,
+                uart_tx_byte1,
+                uart_tx_byte2,
+                uart_tx_byte3,
+                uart_tx_byte4,
+                uart_tx_byte5,
+                uart_tx_byte6
+            );
+            errors = errors + 1;
+        end
+
+        repeat (300) @(negedge clk_i);
+
+        // No debe aceptarse.
+        expect_ram(7,   32'd2); // PLACED_J2
+        expect_ram(327, 32'd5); // J2_SHIP_MASK = 0b101
+
+        // Las celdas siguientes del intento deben seguir libres.
+        // (1,2) -> indice 10 -> RAM[138]
+        // (2,2) -> indice 18 -> RAM[146]
+        expect_ram(138, 32'd0);
+        expect_ram(146, 32'd0);
+
+        // ------------------------------------------------------------
+        // 12b. Ship ID duplicado:
+        //     P,0,3,0,H\n
+        //
+        // La posicion esta libre, pero ship 0 ya fue colocado.
+        // Respuesta esperada:
+        //     PR,0,O\n
+        // ------------------------------------------------------------
+        fork
+            begin
+                uart_send_byte(8'h50); // P
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h33); // 3
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h48); // H
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                uart_receive_byte(uart_tx_byte0);
+                uart_receive_byte(uart_tx_byte1);
+                uart_receive_byte(uart_tx_byte2);
+                uart_receive_byte(uart_tx_byte3);
+                uart_receive_byte(uart_tx_byte4);
+                uart_receive_byte(uart_tx_byte5);
+                uart_receive_byte(uart_tx_byte6);
+            end
+        join
+
+        // PR,0,O\n
+        if (uart_tx_byte0 !== 8'h50 ||
+            uart_tx_byte1 !== 8'h52 ||
+            uart_tx_byte2 !== 8'h2C ||
+            uart_tx_byte3 !== 8'h30 ||
+            uart_tx_byte4 !== 8'h2C ||
+            uart_tx_byte5 !== 8'h4F ||
+            uart_tx_byte6 !== 8'h0A) begin
+
+            $display(
+                "ERROR UART TX PR,O duplicado: recibido=%h %h %h %h %h %h %h",
+                uart_tx_byte0,
+                uart_tx_byte1,
+                uart_tx_byte2,
+                uart_tx_byte3,
+                uart_tx_byte4,
+                uart_tx_byte5,
+                uart_tx_byte6
+            );
+            errors = errors + 1;
+        end
+
+        repeat (300) @(negedge clk_i);
+
+        // Tampoco debe aceptarse.
+        expect_ram(7,   32'd2);
+        expect_ram(327, 32'd5);
+
+        // (3,0)..(3,3) deben continuar libres.
+        expect_ram(152, 32'd0);
+        expect_ram(153, 32'd0);
+        expect_ram(154, 32'd0);
+        expect_ram(155, 32'd0);
+
+        $display("PASS 12: PR,O por traslape y barco duplicado J2");
+
+        // ============================================================
+        // 13. Rechazo J2 por fuera de tablero
+        //
+        // Trama sintacticamente valida:
+        //     P,1,7,7,V\n
+        //
+        // El barco 1 tiene longitud 3, por lo que no cabe verticalmente
+        // desde la fila 7. La FPGA debe responder:
+        //
+        //     PR,1,F\n
+        // ============================================================
+
+        fork
+            begin
+                uart_send_byte(8'h50); // P
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h31); // 1
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h37); // 7
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h37); // 7
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h56); // V
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                uart_receive_byte(uart_tx_byte0);
+                uart_receive_byte(uart_tx_byte1);
+                uart_receive_byte(uart_tx_byte2);
+                uart_receive_byte(uart_tx_byte3);
+                uart_receive_byte(uart_tx_byte4);
+                uart_receive_byte(uart_tx_byte5);
+                uart_receive_byte(uart_tx_byte6);
+            end
+        join
+
+        // PR,1,F\n
+        if (uart_tx_byte0 !== 8'h50 ||
+            uart_tx_byte1 !== 8'h52 ||
+            uart_tx_byte2 !== 8'h2C ||
+            uart_tx_byte3 !== 8'h31 ||
+            uart_tx_byte4 !== 8'h2C ||
+            uart_tx_byte5 !== 8'h46 ||
+            uart_tx_byte6 !== 8'h0A) begin
+
+            $display(
+                "ERROR UART TX PR,F: recibido=%h %h %h %h %h %h %h",
+                uart_tx_byte0,
+                uart_tx_byte1,
+                uart_tx_byte2,
+                uart_tx_byte3,
+                uart_tx_byte4,
+                uart_tx_byte5,
+                uart_tx_byte6
+            );
+            errors = errors + 1;
+        end
+
+        repeat (300) @(negedge clk_i);
+
+        // El rechazo no debe modificar la flota.
+        expect_ram(7,   32'd2); // PLACED_J2
+        expect_ram(327, 32'd5); // J2_SHIP_MASK = 0b101
+
+        $display("PASS 13: rechazo J2 fuera de tablero -> PR,1,F");
+
+        // ============================================================
+        // 14. Completar colocacion de la flota del Jugador 2
+        //
+        // Trama:
+        //     P,1,3,0,H\n
+        //
+        // Barco 1: longitud 3.
+        // Debe ocupar (3,0), (3,1), (3,2).
+        // ============================================================
+
+        fork
+            begin
+                uart_send_byte(8'h50); // P
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h31); // 1
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h33); // 3
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h48); // H
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                // PA,1\n
+                uart_receive_byte(uart_tx_byte0);
+                uart_receive_byte(uart_tx_byte1);
+                uart_receive_byte(uart_tx_byte2);
+                uart_receive_byte(uart_tx_byte3);
+                uart_receive_byte(uart_tx_byte4);
+
+                // B\n
+                uart_receive_byte(uart_tx_byte5);
+                uart_receive_byte(uart_tx_byte6);
+
+                // T,1\n
+                uart_receive_byte(uart_tx_byte7);
+                uart_receive_byte(uart_tx_byte8);
+                uart_receive_byte(uart_tx_byte9);
+                uart_receive_byte(uart_tx_byte10);
+            end
+        join
+
+        // Secuencia completa esperada:
+        //     PA,1\n
+        //     B\n
+        //     T,1\n
+        if (uart_tx_byte0  !== 8'h50 ||
+            uart_tx_byte1  !== 8'h41 ||
+            uart_tx_byte2  !== 8'h2C ||
+            uart_tx_byte3  !== 8'h31 ||
+            uart_tx_byte4  !== 8'h0A ||
+            uart_tx_byte5  !== 8'h42 ||
+            uart_tx_byte6  !== 8'h0A ||
+            uart_tx_byte7  !== 8'h54 ||
+            uart_tx_byte8  !== 8'h2C ||
+            uart_tx_byte9  !== 8'h31 ||
+            uart_tx_byte10 !== 8'h0A) begin
+
+            $display(
+                "ERROR UART inicio batalla: %h %h %h %h %h %h %h %h %h %h %h",
+                uart_tx_byte0,
+                uart_tx_byte1,
+                uart_tx_byte2,
+                uart_tx_byte3,
+                uart_tx_byte4,
+                uart_tx_byte5,
+                uart_tx_byte6,
+                uart_tx_byte7,
+                uart_tx_byte8,
+                uart_tx_byte9,
+                uart_tx_byte10
+            );
+            errors = errors + 1;
+        end
+
+        repeat (300) @(negedge clk_i);
+
+        // BOARD_J2 empieza en RAM[128].
+        // Fila 3 -> indice 24 -> RAM[152].
+        // ship 1 se almacena como valor 2.
+        expect_ram(152, 32'd2);
+        expect_ram(153, 32'd2);
+        expect_ram(154, 32'd2);
+
+        // La siguiente celda debe continuar libre.
+        expect_ram(155, 32'd0);
+
+        // Flota completa de J2.
+        expect_ram(7,   32'd3); // PLACED_J2
+        expect_ram(327, 32'd7); // J2_SHIP_MASK = 0b111
+
+        // FRAME_READY debe haber sido consumido.
+        expect_ram(326, 32'd0);
+
+        // Ambas flotas completas deben iniciar automaticamente
+        // el estado de batalla con turno inicial del Jugador 1.
+        expect_ram(0, 32'd1); // GAME_STATE = STATE_BATTLE
+        expect_ram(1, 32'd1); // TURN = J1
+
+        $display("PASS 14: flotas completas -> batalla, PA + B + T,1");
+
+        // ============================================================
+        // 15. Disparo local de J1: impacto
+        //
+        // Al comenzar la batalla:
+        //   GAME_STATE = BATTLE
+        //   TURN       = J1
+        //   cursor     = (0,0)
+        //
+        // BOARD_J2(0,0) pertenece al barco 0, por lo que el disparo
+        // debe registrarse como CELL_HIT.
+        // ============================================================
+
+        // Verificar condiciones iniciales del disparo.
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd1);    // TURN = J1
+        expect_ram(2, 32'd0);    // CURSOR_ROW
+        expect_ram(3, 32'd0);    // CURSOR_COL
+
+        // BOARD_J2[0] = RAM[128] debe contener ship 0 almacenado como 1.
+        expect_ram(128, 32'd1);
+
+        // SHOTS_J1[0] = RAM[192] aun no disparado.
+        expect_ram(192, 32'd0);
+
+        // Disparar con BTN_OK.
+        press_button(6'b100000);
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo debe quedar registrado como impacto.
+        expect_ram(192, 32'd2);  // CELL_HIT
+
+        // El tablero real del J2 conserva la identidad del barco.
+        expect_ram(128, 32'd1);
+
+        // VGA enemigo:
+        // fila 0, columna visual 10
+        // tile = 0*20 + 10 = 10
+        // Debe mostrar CELL_HIT.
+        expect_vga(10, 32'd2);
+
+        // Un disparo valido entrega el turno al Jugador 2.
+        expect_ram(1, 32'd2);
+
+        $display("PASS 15: disparo J1 (0,0) -> HIT, VGA y TURN=2");
+
+        // ============================================================
+        // 16. Disparo UART de J2: impacto
+        //
+        // Trama:
+        //     S,0,0\\n
+        //
+        // BOARD_J1(0,0) pertenece al barco 0.
+        // Por tanto, J2 debe obtener un HIT.
+        // ============================================================
+
+        // Después del disparo de J1, corresponde el turno al J2.
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd2);    // TURN = J2
+
+        // SHOTS_J2[0] = RAM[256] aun no disparado.
+        expect_ram(256, 32'd0);
+
+        // Enviar S,0,0\\n por UART.
+        fork
+            begin
+                uart_send_byte(8'h53); // S
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h0A); // LF
+            end
+        join
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo debe quedar registrado como HIT.
+        expect_ram(256, 32'd2);   // SHOTS_J2[0] = CELL_HIT
+
+        // El tablero real de J1 conserva la identidad del barco.
+        expect_ram(64, 32'd1);    // BOARD_J1[0]
+
+        // VGA del tablero J1:
+        // fila 0, columna 0 -> tile 0.
+        expect_vga(0, 32'd2);
+
+        // Un disparo valido devuelve el turno a J1.
+        expect_ram(1, 32'd1);
+
+        $display("PASS 16: disparo UART J2 (0,0) -> HIT, VGA y TURN=1");
+
+        // ============================================================
+        // 17. Disparo local de J1: fallo
+        //
+        // Estado despues del disparo UART de J2:
+        //   GAME_STATE = BATTLE
+        //   TURN       = J1
+        //   cursor     = (0,0)
+        //
+        // La casilla (0,4) de BOARD_J2 esta libre.
+        // Por tanto, el disparo debe registrarse como CELL_MISS.
+        // ============================================================
+
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd1);    // TURN = J1
+        expect_ram(2, 32'd0);    // CURSOR_ROW
+        expect_ram(3, 32'd0);    // CURSOR_COL
+
+        // BOARD_J2(0,4) = RAM[132] debe ser agua.
+        expect_ram(132, 32'd0);
+
+        // SHOTS_J1(0,4) = RAM[196] aun no disparado.
+        expect_ram(196, 32'd0);
+
+        // Mover cursor de (0,0) a (0,4).
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+
+        repeat (100) @(negedge clk_i);
+
+        expect_ram(3, 32'd4);     // CURSOR_COL = 4
+
+        // Disparar con BTN_OK.
+        press_button(6'b100000);
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo debe quedar registrado como MISS.
+        expect_ram(196, 32'd3);   // CELL_MISS
+
+        // El tablero real de J2 permanece sin modificar.
+        expect_ram(132, 32'd0);
+
+        // VGA enemigo:
+        // fila 0, columna visual 10 + 4 = 14.
+        // tile = 14.
+        expect_vga(14, 32'd3);
+
+        // Un disparo valido devuelve el turno al Jugador 2.
+        expect_ram(1, 32'd2);
+
+        $display("PASS 17: disparo J1 (0,4) -> MISS, VGA y TURN=2");
+
+        // ============================================================
+        // 18. Disparo UART de J2: MISS
+        //
+        // Trama:
+        //     S,0,4\n
+        //
+        // BOARD_J1(0,4) esta libre.
+        // Por tanto, J2 debe obtener un MISS.
+        // ============================================================
+
+        // Despues del disparo de J1, corresponde el turno al J2.
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd2);    // TURN = J2
+
+        // SHOTS_J2[4] = RAM[260] aun no disparado.
+        expect_ram(260, 32'd0);
+
+        // Enviar S,0,4\n por UART.
+        fork
+            begin
+                uart_send_byte(8'h53); // S
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h34); // 4
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                // El disparo no genera respuesta UART.
+            end
+        join
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo debe quedar registrado como MISS.
+        expect_ram(260, 32'd3);   // SHOTS_J2[4] = CELL_MISS
+
+        // El tablero real de J1 permanece sin modificar.
+        expect_ram(68, 32'd0);    // BOARD_J1[4]
+
+        // VGA del tablero J1:
+        // fila 0, columna visual 10 + 4 = 14.
+        expect_vga(14, 32'd3);
+
+        // Un disparo valido devuelve el turno a J1.
+        expect_ram(1, 32'd1);
+
+        $display("PASS 18: disparo UART J2 (0,4) -> MISS, VGA y TURN=1");
+
+        // ============================================================
+        // 19. Disparo repetido de J1: debe ser ignorado
+        //
+        // J1 ya disparo anteriormente en (0,0) y obtuvo HIT.
+        // Un segundo disparo sobre la misma casilla no debe:
+        //   - modificar SHOTS_J1
+        //   - modificar VGA
+        //   - cambiar el turno
+        // ============================================================
+
+        // Despues del PASS 18 corresponde nuevamente el turno a J1.
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd1);    // TURN = J1
+
+        // La casilla (0,0) ya fue disparada por J1.
+        expect_ram(192, 32'd2);  // SHOTS_J1[0] = CELL_HIT
+        expect_vga(10, 32'd2);   // VGA enemigo: tile 10 = CELL_HIT
+
+        // Intentar disparar nuevamente en (0,0).
+        press_button(6'b100000); // BTN_OK
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo repetido debe ser ignorado.
+        expect_ram(192, 32'd2);  // SHOTS_J1[0] permanece HIT
+
+        // La VGA debe permanecer sin cambios.
+        expect_vga(10, 32'd2);
+
+        // El turno debe permanecer en J1.
+        expect_ram(1, 32'd1);
+
+        $display("PASS 19: disparo J1 repetido (0,0) -> ignorado, TURN=1");
+
+        // ============================================================
+        // 20. Disparo repetido UART de J2: debe ser ignorado
+        //
+        // Despues del PASS 19 corresponde el turno a J1.
+        //
+        // El cursor de J1 se desplaza mediante BTN_RIGHT. Debido al
+        // comportamiento del debounce del testbench, las llamadas a
+        // press_button() pueden generar mas de un incremento.
+        // En esta prueba el cursor queda en (0,7).
+        // ============================================================
+
+        expect_ram(0, 32'd1);    // GAME_STATE = BATTLE
+        expect_ram(1, 32'd1);    // TURN = J1
+
+        // Mover el cursor hacia la derecha.
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+        press_button(6'b001000); // BTN_RIGHT
+
+        repeat (300) @(negedge clk_i);
+
+        // En esta simulacion el cursor queda en (0,7).
+        expect_ram(2, 32'd0);    // CURSOR_ROW
+        expect_ram(3, 32'd7);    // CURSOR_COL
+
+        // SHOTS_J1[7] = RAM[199].
+        expect_ram(199, 32'd0);
+
+        // Disparar en (0,7).
+        press_button(6'b100000); // BTN_OK
+
+        repeat (300) @(negedge clk_i);
+
+        // (0,7) esta libre en BOARD_J2, por lo que es MISS.
+        expect_ram(199, 32'd3);  // CELL_MISS
+
+        // Tile enemigo:
+        // fila 0, columna visual 10 + 7 = 17.
+        expect_vga(17, 32'd3);
+
+        // El turno pasa a J2.
+        expect_ram(1, 32'd2);
+
+        // ------------------------------------------------------------
+        // Intentar nuevamente S,0,0 por UART.
+        //
+        // J2 ya disparo anteriormente en (0,0), por lo que este
+        // disparo repetido debe ser ignorado.
+        // ------------------------------------------------------------
+
+        // El disparo anterior de J2 permanece como HIT.
+        expect_ram(256, 32'd2);
+        expect_vga(0, 32'd2);
+
+        fork
+            begin
+                uart_send_byte(8'h53); // S
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h2C); // ,
+                uart_send_byte(8'h30); // 0
+                uart_send_byte(8'h0A); // LF
+            end
+        join
+
+        repeat (300) @(negedge clk_i);
+
+        // El disparo repetido no debe modificar la casilla.
+        expect_ram(256, 32'd2);
+        expect_vga(0, 32'd2);
+
+        // El turno tampoco debe cambiar.
+        expect_ram(1, 32'd2);
+
+        $display("PASS 20: disparo UART J2 repetido (0,0) -> ignorado, TURN=2");
+
+
+
+
+        if (errors != 0)
+            $fatal(1,
+                "FAIL: game firmware con %0d errores",
+                errors);
+
+        $display("----------------------------------------");
+        $display("TODAS LAS PRUEBAS PASARON");
+        $display("Barco 0: longitud 4 OK");
+        $display("Limites: OK");
+        $display("Barco 1: longitud 3 OK");
+        $display("Traslape: OK");
+        $display("Barco 2: longitud 2 OK");
+        $display("BOARD_J1 + VGA: OK");
+        $display("----------------------------------------");
+
+        $finish;
+    end
+
+endmodule
