@@ -1086,6 +1086,9 @@ win_j2:
     addi    a0, a0, 1
     sw      a0, 36(s0)
 
+    # Actualizar marcador de victorias en display.
+    jal     t6, update_display
+
     # LED de partida terminada.
     addi    a0, zero, LED_FINISHED
     sw      a0, 0x138(s1)
@@ -1422,6 +1425,9 @@ win_j1:
     addi    a0, a0, 1
     sw      a0, 32(s0)
 
+    # Actualizar marcador de victorias en display.
+    jal     t6, update_display
+
     # LED de partida terminada.
     addi    a0, zero, LED_FINISHED
     sw      a0, 0x138(s1)
@@ -1705,6 +1711,49 @@ invalid_placement:
 # Inicializa una nueva partida.
 # ============================================================================
 
+# ============================================================================
+# update_display
+#
+# Actualiza el display de 7 segmentos con el marcador de victorias.
+#
+# Formato BCD:
+#
+#     [15:12] [11:8] [7:4]    [3:0]
+#        0       0    WINS_J1  WINS_J2
+#
+# Cada contador se muestra modulo 10 para garantizar un digito BCD valido.
+# ============================================================================
+update_display:
+    # WINS_J1 mod 10.
+    lw      t0, 32(s0)
+
+update_display_j1_mod:
+    addi    t2, zero, 10
+    blt     t0, t2, update_display_j1_ready
+    addi    t0, t0, -10
+    jal     zero, update_display_j1_mod
+
+update_display_j1_ready:
+    # WINS_J2 mod 10.
+    lw      t1, 36(s0)
+
+update_display_j2_mod:
+    addi    t2, zero, 10
+    blt     t1, t2, update_display_j2_ready
+    addi    t1, t1, -10
+    jal     zero, update_display_j2_mod
+
+update_display_j2_ready:
+    # J1 ocupa el segundo nibble; J2 el primero.
+    slli    t0, t0, 4
+    or      t0, t0, t1
+
+    # DISPLAY = 0x00010130 = s1 + 0x130.
+    sw      t0, 0x130(s1)
+
+    jalr    zero, 0(t6)
+
+
 init_game:
     # Variables de estado.
     sw      zero, 0(s0)          # GAME_STATE = colocacion
@@ -1781,5 +1830,9 @@ clear_vga:
     # Indicar fase de colocacion.
     addi    t0, zero, LED_PLACEMENT
     sw      t0, 0x138(s1)
+
+    # Mostrar marcador actual. Los contadores de victorias no se
+    # borran en init_game, por lo que BTN_RST conserva el marcador.
+    jal     t6, update_display
 
     jalr    zero, 0(ra)

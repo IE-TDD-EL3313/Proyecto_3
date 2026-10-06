@@ -305,6 +305,193 @@ module game_firmware_tb;
         end
     endtask
 
+
+    // ------------------------------------------------------------
+    // PASS 30: auxiliares para partida completa end-to-end.
+    // ------------------------------------------------------------
+
+    task automatic e2e_expect_battle_start;
+        logic [7:0] b0, b1, b2, b3, b4, b5;
+        begin
+            uart_receive_byte(b0); // B
+            uart_receive_byte(b1); // LF
+            uart_receive_byte(b2); // T
+            uart_receive_byte(b3); // ,
+            uart_receive_byte(b4); // 1
+            uart_receive_byte(b5); // LF
+
+            if (b0 !== 8'h42 ||
+                b1 !== 8'h0A ||
+                b2 !== 8'h54 ||
+                b3 !== 8'h2C ||
+                b4 !== 8'h31 ||
+                b5 !== 8'h0A) begin
+                $display(
+                    "ERROR E2E inicio batalla: recibido=%h %h %h %h %h %h",
+                    b0,b1,b2,b3,b4,b5
+                );
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    task automatic e2e_j1_shot(
+        input [7:0] row,
+        input [7:0] col,
+        input [7:0] result_ascii,
+        input       final_shot
+    );
+        logic [7:0] b0,b1,b2,b3,b4,b5,b6,b7,b8;
+        logic [7:0] x0,x1,x2,x3,x4,x5;
+        begin
+            fork
+                begin
+                    press_button(BTN_OK);
+                end
+
+                begin
+                    // DR,row,col,result\n
+                    uart_receive_byte(b0);
+                    uart_receive_byte(b1);
+                    uart_receive_byte(b2);
+                    uart_receive_byte(b3);
+                    uart_receive_byte(b4);
+                    uart_receive_byte(b5);
+                    uart_receive_byte(b6);
+                    uart_receive_byte(b7);
+                    uart_receive_byte(b8);
+
+                    if (b0 !== 8'h44 ||               // D
+                        b1 !== 8'h52 ||               // R
+                        b2 !== 8'h2C ||
+                        b3 !== (row + 8'h30) ||
+                        b4 !== 8'h2C ||
+                        b5 !== (col + 8'h30) ||
+                        b6 !== 8'h2C ||
+                        b7 !== result_ascii ||
+                        b8 !== 8'h0A) begin
+                        $display(
+                            "ERROR E2E DR (%0d,%0d): %h %h %h %h %h %h %h %h %h",
+                            row,col,b0,b1,b2,b3,b4,b5,b6,b7,b8
+                        );
+                        errors = errors + 1;
+                    end
+
+                    if (!final_shot) begin
+                        // T,2\n
+                        uart_receive_byte(x0);
+                        uart_receive_byte(x1);
+                        uart_receive_byte(x2);
+                        uart_receive_byte(x3);
+
+                        if (x0 !== 8'h54 ||
+                            x1 !== 8'h2C ||
+                            x2 !== 8'h32 ||
+                            x3 !== 8'h0A) begin
+                            $display(
+                                "ERROR E2E turno J2: %h %h %h %h",
+                                x0,x1,x2,x3
+                            );
+                            errors = errors + 1;
+                        end
+                    end
+                    else begin
+                        // FIN,1\n
+                        uart_receive_byte(x0);
+                        uart_receive_byte(x1);
+                        uart_receive_byte(x2);
+                        uart_receive_byte(x3);
+                        uart_receive_byte(x4);
+                        uart_receive_byte(x5);
+
+                        if (x0 !== 8'h46 ||             // F
+                            x1 !== 8'h49 ||             // I
+                            x2 !== 8'h4E ||             // N
+                            x3 !== 8'h2C ||
+                            x4 !== 8'h31 ||
+                            x5 !== 8'h0A) begin
+                            $display(
+                                "ERROR E2E FIN1: %h %h %h %h %h %h",
+                                x0,x1,x2,x3,x4,x5
+                            );
+                            errors = errors + 1;
+                        end
+                    end
+                end
+            join
+
+            repeat (300) @(negedge clk_i);
+        end
+    endtask
+
+    task automatic e2e_j2_shot_miss(
+        input [7:0] row,
+        input [7:0] col
+    );
+        logic [7:0] b0,b1,b2,b3,b4,b5,b6,b7,b8;
+        logic [7:0] t0,t1,t2,t3;
+        begin
+            fork
+                begin
+                    uart_send_byte(8'h53); // S
+                    uart_send_byte(8'h2C);
+                    uart_send_byte(row + 8'h30);
+                    uart_send_byte(8'h2C);
+                    uart_send_byte(col + 8'h30);
+                    uart_send_byte(8'h0A);
+                end
+
+                begin
+                    // SR,row,col,F\n
+                    uart_receive_byte(b0);
+                    uart_receive_byte(b1);
+                    uart_receive_byte(b2);
+                    uart_receive_byte(b3);
+                    uart_receive_byte(b4);
+                    uart_receive_byte(b5);
+                    uart_receive_byte(b6);
+                    uart_receive_byte(b7);
+                    uart_receive_byte(b8);
+
+                    if (b0 !== 8'h53 ||               // S
+                        b1 !== 8'h52 ||               // R
+                        b2 !== 8'h2C ||
+                        b3 !== (row + 8'h30) ||
+                        b4 !== 8'h2C ||
+                        b5 !== (col + 8'h30) ||
+                        b6 !== 8'h2C ||
+                        b7 !== 8'h46 ||               // F
+                        b8 !== 8'h0A) begin
+                        $display(
+                            "ERROR E2E SR (%0d,%0d): %h %h %h %h %h %h %h %h %h",
+                            row,col,b0,b1,b2,b3,b4,b5,b6,b7,b8
+                        );
+                        errors = errors + 1;
+                    end
+
+                    // T,1\n
+                    uart_receive_byte(t0);
+                    uart_receive_byte(t1);
+                    uart_receive_byte(t2);
+                    uart_receive_byte(t3);
+
+                    if (t0 !== 8'h54 ||
+                        t1 !== 8'h2C ||
+                        t2 !== 8'h31 ||
+                        t3 !== 8'h0A) begin
+                        $display(
+                            "ERROR E2E retorno turno J1: %h %h %h %h",
+                            t0,t1,t2,t3
+                        );
+                        errors = errors + 1;
+                    end
+                end
+            join
+
+            repeat (300) @(negedge clk_i);
+        end
+    endtask
+
     task automatic expect_ram(
         input integer word_index,
         input [31:0] expected
@@ -2671,6 +2858,204 @@ module game_firmware_tb;
         end
 
         $display("PASS 28: disparo UART fuera de turno ignorado sin cambiar estado");
+
+        // ============================================================
+        // 29. Marcador de victorias en display de 7 segmentos
+        //
+        // El marcador actual debe ser:
+        //
+        //     WINS_J1 = 2
+        //     WINS_J2 = 1
+        //
+        // Formato BCD del firmware:
+        //
+        //     0x00XY
+        //
+        // donde X = WINS_J1 y Y = WINS_J2.
+        // Por tanto, el registro DISPLAY debe contener 0x0021.
+        // ============================================================
+
+        expect_ram(8, 32'd2);
+        expect_ram(9, 32'd1);
+
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0021) begin
+            $display(
+                "ERROR PASS29: DISPLAY esperado=00000021 obtenido=%h",
+                dut.u_locales.u_seg7_ctrl.rdata_o
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 29: display MMIO muestra marcador J1=2 J2=1 -> 0021");
+
+        // ============================================================
+        // 30. PARTIDA COMPLETA END-TO-END
+        //
+        // No se precargan BOARD_J1, BOARD_J2, SHOTS_J1 ni SHOTS_J2.
+        //
+        // Flujo real:
+        //   reset
+        //   -> colocacion J2 por UART
+        //   -> colocacion J1 por botones
+        //   -> batalla alternada J1/J2
+        //   -> hundimiento de los tres barcos de J2
+        //   -> FIN,1
+        //   -> WINS_J1 incrementado
+        //   -> DISPLAY actualizado
+        // ============================================================
+
+        // Reiniciar conservando marcador previo 2-1.
+        press_button(7'b1000000);
+
+        expect_ram(0, 32'd0);  // PLACEMENT
+        expect_ram(6, 32'd0);  // PLACED_J1
+        expect_ram(7, 32'd0);  // PLACED_J2
+        expect_ram(8, 32'd2);  // WINS_J1
+        expect_ram(9, 32'd1);  // WINS_J2
+
+        // ------------------------------------------------------------
+        // J2 coloca primero su flota completa mediante UART.
+        //
+        // barco 0: H (0,0), longitud 4
+        // barco 1: H (3,0), longitud 3
+        // barco 2: V (6,4), longitud 2
+        // ------------------------------------------------------------
+
+        place_j2_expect_pa(8'd0, 8'd0, 8'd0, 8'h48); // H
+        place_j2_expect_pa(8'd1, 8'd3, 8'd0, 8'h48); // H
+        place_j2_expect_pa(8'd2, 8'd6, 8'd4, 8'h56); // V
+
+        expect_ram(7, 32'd3);
+
+        // ------------------------------------------------------------
+        // J1 coloca su flota únicamente mediante botones.
+        //
+        // barco 0: H (0,0), longitud 4
+        // ------------------------------------------------------------
+
+        press_button(BTN_OK);
+
+        // barco 1: V (0,6), longitud 3.
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+        press_button(BTN_SEL);
+        press_button(BTN_OK);
+
+        // barco 2: H (1,0), longitud 2.
+        // Al aceptar este barco ambas flotas quedan completas.
+        // Firmware debe transmitir B\n y T,1\n.
+        press_button(BTN_DOWN);
+
+        fork
+            begin
+                press_button(BTN_OK);
+            end
+            begin
+                e2e_expect_battle_start();
+            end
+        join
+
+        expect_ram(0, 32'd1); // BATTLE
+        expect_ram(1, 32'd1); // TURN J1
+        expect_ram(6, 32'd3); // PLACED_J1
+        expect_ram(7, 32'd3); // PLACED_J2
+
+        // ------------------------------------------------------------
+        // BATALLA COMPLETA
+        //
+        // J1 destruye todas las posiciones de la flota J2.
+        // Entre cada disparo de J1, J2 dispara a una casilla de agua.
+        // ------------------------------------------------------------
+
+        // J1 -> (0,0), impacto.
+        e2e_j1_shot(8'd0,8'd0,8'h49,1'b0); // I
+        e2e_j2_shot_miss(8'd7,8'd7);
+
+        // (0,0) -> (0,1)
+        press_button(BTN_RIGHT);
+        e2e_j1_shot(8'd0,8'd1,8'h49,1'b0);
+        e2e_j2_shot_miss(8'd7,8'd6);
+
+        // (0,1) -> (0,2)
+        press_button(BTN_RIGHT);
+        e2e_j1_shot(8'd0,8'd2,8'h49,1'b0);
+        e2e_j2_shot_miss(8'd7,8'd5);
+
+        // (0,2) -> (0,3): barco 0 hundido.
+        press_button(BTN_RIGHT);
+        e2e_j1_shot(8'd0,8'd3,8'h48,1'b0); // H
+        e2e_j2_shot_miss(8'd7,8'd4);
+
+        // (0,3) -> (3,0)
+        press_button(BTN_DOWN);
+        press_button(BTN_DOWN);
+        press_button(BTN_DOWN);
+        press_button(BTN_LEFT);
+        press_button(BTN_LEFT);
+        press_button(BTN_LEFT);
+
+        e2e_j1_shot(8'd3,8'd0,8'h49,1'b0);
+        e2e_j2_shot_miss(8'd7,8'd3);
+
+        // (3,0) -> (3,1)
+        press_button(BTN_RIGHT);
+        e2e_j1_shot(8'd3,8'd1,8'h49,1'b0);
+        e2e_j2_shot_miss(8'd7,8'd2);
+
+        // (3,1) -> (3,2): barco 1 hundido.
+        press_button(BTN_RIGHT);
+        e2e_j1_shot(8'd3,8'd2,8'h48,1'b0); // H
+        e2e_j2_shot_miss(8'd7,8'd1);
+
+        // (3,2) -> (6,4)
+        press_button(BTN_DOWN);
+        press_button(BTN_DOWN);
+        press_button(BTN_DOWN);
+        press_button(BTN_RIGHT);
+        press_button(BTN_RIGHT);
+
+        e2e_j1_shot(8'd6,8'd4,8'h49,1'b0);
+        e2e_j2_shot_miss(8'd7,8'd0);
+
+        // (6,4) -> (7,4): ultimo segmento del ultimo barco.
+        press_button(BTN_DOWN);
+        e2e_j1_shot(8'd7,8'd4,8'h48,1'b1); // H + FIN,1
+
+        // ------------------------------------------------------------
+        // Estado final obtenido únicamente por las interfaces reales.
+        // ------------------------------------------------------------
+
+        expect_ram(0, 32'd2); // FINISHED
+        expect_ram(8, 32'd3); // WINS_J1: 2 -> 3
+        expect_ram(9, 32'd1); // WINS_J2 permanece 1
+
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0031) begin
+            $display(
+                "ERROR PASS30 DISPLAY: esperado=00000031 obtenido=%h",
+                dut.u_locales.u_seg7_ctrl.rdata_o
+            );
+            errors = errors + 1;
+        end
+
+        // Las nueve posiciones de la flota J2 deben haber sido
+        // alcanzadas por J1.
+        expect_ram(192, 32'd2); // (0,0)
+        expect_ram(193, 32'd2); // (0,1)
+        expect_ram(194, 32'd2); // (0,2)
+        expect_ram(195, 32'd2); // (0,3)
+
+        expect_ram(216, 32'd2); // (3,0)
+        expect_ram(217, 32'd2); // (3,1)
+        expect_ram(218, 32'd2); // (3,2)
+
+        expect_ram(244, 32'd2); // (6,4)
+        expect_ram(252, 32'd2); // (7,4)
+
+        $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=0031");
 
         if (errors != 0)
             $fatal(1,
