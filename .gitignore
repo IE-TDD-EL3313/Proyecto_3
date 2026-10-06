@@ -33,3 +33,6 @@ xsim.dir/
 *.log
 *.pb
 *.wdb
+
+# Firmware - artefactos de compilacion
+cpu/build/
