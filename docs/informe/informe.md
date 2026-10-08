@@ -275,86 +275,385 @@ concurrente, batalla, fin de partida y reinicio. -->
 
 ## 7. Procesador RISC-V
 
-<!-- Sugerencia general: un apartado por bloque, todos con los mismos subtítulos ####.
-Incluir al inicio de la sección la figura del diagrama de tercer nivel del procesador. -->
+El procesador está implementado en SystemVerilog y utiliza una arquitectura uniciclo de 32 bits. El diseño separa el núcleo, las memorias y la interconexión con periféricos, permitiendo verificar cada componente de forma independiente.
 
 ### 7.1 Núcleo
 
+El módulo `riscv_core.sv` conecta el datapath y la unidad de control. Ejecuta un subconjunto de 29 instrucciones RV32I y proporciona buses independientes para instrucciones y datos.
+
 #### Entradas y salidas
 
-<!-- Sugerencia: tabla de señales con nombre, ancho, dirección y descripción. -->
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `clk_i` | Entrada | 1 bit | Reloj del procesador |
+| `rst_i` | Entrada | 1 bit | Reset síncrono activo alto |
+| `ProgIn_i` | Entrada | 32 bits | Instrucción entregada por la ROM |
+| `DataIn_i` | Entrada | 32 bits | Dato leído desde RAM o periféricos |
+| `ProgAddress_o` | Salida | 32 bits | Dirección de la instrucción actual |
+| `DataAddress_o` | Salida | 32 bits | Dirección de datos calculada por la ALU |
+| `DataOut_o` | Salida | 32 bits | Dato del segundo registro fuente para escritura |
+| `we_o` | Salida | 1 bit | Habilitación de escritura de datos, bloqueada durante reset |
+
+Las direcciones se expresan en bytes.
 
 #### Diagrama del datapath
 
-<!-- Sugerencia: figura del datapath con buses, anchos y señales de control. -->
+El siguiente esquema representa las conexiones funcionales principales. La ROM y la RAM/periféricos se encuentran fuera de `riscv_core`.
+
+```text
+                    +-------------------+
+             +----->| Registro PC       |-----> ROM externa
+             |      +-------------------+          |
+             |               |                     | Instrucción
+             |               v                     v
+             |             PC + 4          Decodificación y control
+             |               |                  |          |
+             |               |                  v          v
+             |               |          Banco de       Generador de
+             |               |          registros      inmediatos
+             |               |           |     |            |
+             |               |          RD1   RD2           Imm
+             |               |           |     |            |
+             |               |           +-- MUX A/B -------+
+             |               |                  |
+             |               |                  v
+             |               |                 ALU
+             |               |                  |
+             |               |             ALUResult
+             |               |                  |
+             |               |        RAM / MMIO externos
+             |               |                  |
+             |               |               DataIn
+             |               |                  |
+             |               +----> MUX de escritura <---- ALUResult
+             |                              |
+             |                              v
+             |                       Banco de registros
+             |
+             +---- MUX siguiente PC <---- PC + 4
+                            ^
+                            |
+                    Destino de salto
+                            ^
+                            |
+                 PC / RD1 / Imm / comparación
+```
+
+El dato de escritura hacia RAM o MMIO proviene directamente de `RD2`. La lógica de saltos calcula su destino mediante un sumador independiente de la ALU.
 
 #### Funcionamiento
 
-<!-- Sugerencia: cómo se ejecuta cada tipo de instrucción y cómo se accede a RAM y
-periféricos. -->
+Durante cada ciclo:
+
+1. El PC presenta la dirección de la instrucción.
+2. La ROM entrega la instrucción de forma combinacional.
+3. El decodificador extrae los campos y la unidad de control genera las señales.
+4. El banco de registros entrega los operandos y se construye el inmediato.
+5. La ALU calcula el resultado o la dirección de datos.
+6. Se seleccionan el dato de escritura y el siguiente PC.
+7. En el flanco ascendente se actualizan los elementos habilitados.
+
+Estas operaciones pertenecen a un mismo ciclo; no corresponden a etapas de un pipeline.
+
+El reset devuelve el PC a cero y borra los registros modificables. Las escrituras externas se bloquean mientras `rst_i` está activo.
 
 #### Relación con el sistema
+
+El núcleo ejecuta el programa ensamblador que controla el juego. Obtiene instrucciones desde ROM y utiliza el bus de datos para acceder a RAM y periféricos.
+
+El módulo `processor_subsystem.sv` integra el núcleo con ROM, RAM y selección del espacio MMIO. El núcleo también puede conectarse directamente a una interconexión externa si el top del equipo administra las memorias.
 
 ### 7.2 Unidad de control
 
+El módulo `control_unit.sv` identifica la instrucción y genera las señales que coordinan el datapath.
+
 #### Entradas y salidas
+
+| Señal | Dirección | Ancho | Función |
+| --- | --- | --- | --- |
+| `opcode` | Entrada | 7 bits | Identifica la familia de instrucciones |
+| `funct3` | Entrada | 3 bits | Especifica la operación |
+| `funct7` | Entrada | 7 bits | Distingue variantes de instrucciones |
+| `RegWrite` | Salida | 1 bit | Habilita escritura en el banco de registros |
+| `ALUSrcA` | Salida | 1 bit | Selecciona RD1 o PC |
+| `ALUSrcB` | Salida | 1 bit | Selecciona RD2 o inmediato |
+| `ALUControl` | Salida | 4 bits | Selecciona la operación de la ALU |
+| `ImmSrc` | Salida | 3 bits | Selecciona el formato del inmediato |
+| `ResultSrc` | Salida | 2 bits | Selecciona el dato que se escribe en un registro |
+| `BranchCtrl` | Salida | 2 bits | Selecciona la condición de bifurcación |
+| `Branch` | Salida | 1 bit | Indica bifurcación condicional |
+| `Jump` | Salida | 1 bit | Indica salto incondicional |
+| `JALR` | Salida | 1 bit | Selecciona la base y el ajuste del salto indirecto |
+| `MemWrite` | Salida | 1 bit | Solicita escritura en memoria o MMIO |
 
 #### Tabla de señales de control
 
-<!-- Sugerencia: tabla instrucción → señales de control. -->
+| Señal | Codificación |
+| --- | --- |
+| `ALUSrcA` | 0: RD1; 1: PC |
+| `ALUSrcB` | 0: RD2; 1: inmediato |
+| `ImmSrc` | 000: I; 001: S; 010: B; 011: J; 100: U |
+| `ResultSrc` | 00: ALU; 01: dato leído; 10: PC+4; 11: cero |
+| `BranchCtrl` | 00: BEQ; 01: BNE; 10: BLT; 11: BGE |
+
+La siguiente tabla resume las señales principales por grupo. El símbolo `—` indica que la señal no afecta el resultado de esa instrucción; el RTL asigna valores definidos.
+
+| Instrucción o grupo | RegWrite | ALUSrcA | ALUSrcB | ImmSrc | ResultSrc | MemWrite | Branch | Jump | JALR |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Operaciones entre registros | 1 | 0 | 0 | — | 00 | 0 | 0 | 0 | 0 |
+| Operaciones con inmediato | 1 | 0 | 1 | 000 | 00 | 0 | 0 | 0 | 0 |
+| LW | 1 | 0 | 1 | 000 | 01 | 0 | 0 | 0 | 0 |
+| SW | 0 | 0 | 1 | 001 | — | 1 | 0 | 0 | 0 |
+| BEQ, BNE, BLT, BGE | 0 | — | — | 010 | — | 0 | 1 | 0 | 0 |
+| JAL | 1 | — | — | 011 | 10 | 0 | 0 | 1 | 0 |
+| JALR | 1 | — | — | 000 | 10 | 0 | 0 | 1 | 1 |
+| LUI | 1 | 0 | 1 | 100 | 00 | 0 | 0 | 0 | 0 |
+| AUIPC | 1 | 1 | 1 | 100 | 00 | 0 | 0 | 0 | 0 |
+
+`ALUControl` depende de la operación concreta y se describe en la sección 7.4.
 
 #### Funcionamiento
 
+La unidad es combinacional: sus salidas dependen de los campos de la instrucción actual.
+
+Primero establece valores por defecto que deshabilitan escrituras y cambios de flujo. Después activa las señales correspondientes a la instrucción reconocida. Para LUI selecciona el inmediato superior como resultado; para AUIPC selecciona el PC y lo suma al inmediato superior.
+
+Las instrucciones no soportadas no escriben registros ni memoria y permiten que el PC avance secuencialmente, sin generar una excepción.
+
 #### Relación con el sistema
+
+La unidad de control coordina los componentes internos del procesador. No contiene reglas del juego ni lógica específica de periféricos: estas acciones dependen del programa ejecutado y de las direcciones utilizadas.
 
 ### 7.3 Banco de registros
 
+El módulo `register_file.sv` almacena los operandos y resultados temporales del procesador.
+
 #### Entradas y salidas
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `clk_i` | Entrada | 1 bit | Reloj |
+| `rst_i` | Entrada | 1 bit | Reset síncrono activo alto |
+| `RegWrite` | Entrada | 1 bit | Habilitación de escritura |
+| `rs1` | Entrada | 5 bits | Índice del primer registro fuente |
+| `rs2` | Entrada | 5 bits | Índice del segundo registro fuente |
+| `rd` | Entrada | 5 bits | Índice del registro destino |
+| `WriteData` | Entrada | 32 bits | Dato a almacenar |
+| `RD1` | Salida | 32 bits | Contenido del primer registro fuente |
+| `RD2` | Salida | 32 bits | Contenido del segundo registro fuente |
 
 #### Funcionamiento
 
+El banco presenta 32 registros arquitectónicos de 32 bits. El registro x0 es una constante y las escrituras dirigidas a él se ignoran; únicamente x1 a x31 necesitan almacenamiento.
+
+Los dos puertos de lectura son combinacionales. La escritura se realiza en el flanco ascendente si `RegWrite=1`, `rd` es diferente de cero y el reset no está activo.
+
+El reset tiene prioridad sobre la escritura y coloca x1 a x31 en cero.
+
 #### Relación con el sistema
+
+`RD1` y `RD2` alimentan las operaciones del datapath. Además, `RD2` proporciona el dato utilizado por SW y ambos operandos se emplean para evaluar bifurcaciones.
+
+`WriteData` recibe el resultado seleccionado por el multiplexor de escritura: ALU, memoria o PC+4.
 
 ### 7.4 ALU
 
+El módulo `alu.sv` implementa la unidad aritmético-lógica de 32 bits.
+
 #### Entradas y salidas
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `ALUOperandA` | Entrada | 32 bits | Primer operando |
+| `ALUOperandB` | Entrada | 32 bits | Segundo operando |
+| `ALUControl` | Entrada | 4 bits | Operación seleccionada |
+| `ALUResult` | Salida | 32 bits | Resultado |
 
 #### Operaciones soportadas
 
-<!-- Sugerencia: tabla código de operación → operación → instrucciones que la usan. -->
+| ALUControl | Operación | Resultado |
+| --- | --- | --- |
+| 0000 | ADD | A + B |
+| 0001 | SUB | A − B |
+| 0010 | AND | AND bit a bit |
+| 0011 | OR | OR bit a bit |
+| 0100 | XOR | XOR bit a bit |
+| 0101 | SLL | Desplazamiento lógico a la izquierda |
+| 0110 | SRL | Desplazamiento lógico a la derecha |
+| 0111 | SRA | Desplazamiento aritmético a la derecha |
+| 1000 | SLT | 1 si A < B con signo; 0 en otro caso |
+| 1001 | SLTU | 1 si A < B sin signo; 0 en otro caso |
+| 1010 | PASS_B | Entrega B para implementar LUI |
 
 #### Funcionamiento
 
+La ALU es combinacional y no almacena resultados. Los desplazamientos utilizan los cinco bits inferiores del segundo operando, por lo que el desplazamiento efectivo está entre 0 y 31 posiciones.
+
+SRA conserva el signo del operando al desplazar hacia la derecha. SLT interpreta los operandos con signo, mientras que SLTU los interpreta sin signo. Los códigos de control reservados producen cero.
+
 #### Relación con el sistema
+
+La ALU realiza los cálculos del programa y genera las direcciones de LW y SW. También ejecuta la suma PC más inmediato superior para AUIPC.
+
+Las condiciones de branch y los destinos de salto se calculan en bloques separados.
 
 ### 7.5 Generador de inmediatos y lógica de saltos
 
+Estos componentes construyen las constantes de las instrucciones y determinan los cambios de flujo del programa.
+
 #### Entradas y salidas
+
+**Generador de inmediatos: `immediate_generator.sv`**
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `ProgIn_i` | Entrada | 32 bits | Instrucción actual |
+| `ImmSrc` | Entrada | 3 bits | Formato del inmediato |
+| `Imm` | Salida | 32 bits | Inmediato construido |
+
+**Comparador: `branch_comparator.sv`**
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `RD1`, `RD2` | Entrada | 32 bits cada una | Operandos de comparación |
+| `BranchCtrl` | Entrada | 2 bits | Condición que se evalúa |
+| `BranchTaken` | Salida | 1 bit | Resultado de la condición |
+
+**Lógica de saltos: `branch_jump_logic.sv`**
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `PC` | Entrada | 32 bits | Dirección actual |
+| `RD1` | Entrada | 32 bits | Base para JALR |
+| `Imm` | Entrada | 32 bits | Desplazamiento |
+| `BranchTaken` | Entrada | 1 bit | Resultado del comparador |
+| `Branch`, `Jump`, `JALR` | Entrada | 1 bit cada una | Señales de control |
+| `TargetPC` | Salida | 32 bits | Destino calculado |
+| `PCSrc` | Salida | 1 bit | Selección del destino frente a PC+4 |
 
 #### Funcionamiento
 
+El generador reconstruye los inmediatos según el formato:
+
+| Formato | Construcción |
+| --- | --- |
+| I | Bits `[31:20]`, extendidos con signo |
+| S | Bits `[31:25]` y `[11:7]`, extendidos con signo |
+| B | Bits `[31]`, `[7]`, `[30:25]`, `[11:8]` y un cero final, extendidos con signo |
+| J | Bits `[31]`, `[19:12]`, `[20]`, `[30:21]` y un cero final, extendidos con signo |
+| U | Bits `[31:12]` seguidos de 12 ceros |
+
+Los inmediatos B y J ya incluyen el bit inferior cero y no requieren un desplazamiento adicional.
+
+El comparador evalúa igualdad, desigualdad, menor que y mayor o igual. BLT y BGE utilizan comparación con signo.
+
+La lógica calcula:
+
+- Branch y JAL: `TargetPC = PC + Imm`.
+- JALR: `TargetPC = (RD1 + Imm) & 0xFFFFFFFE`.
+- Selección: `PCSrc = Jump | (Branch & BranchTaken)`.
+
+Si `PCSrc=0`, se utiliza PC+4. Para JALR se limpia únicamente el bit cero; no se fuerza a cero el bit uno.
+
 #### Relación con el sistema
+
+Estos bloques permiten ejecutar condiciones, ciclos y llamadas del programa ensamblador. JAL y JALR también seleccionan PC+4 como dirección de retorno para el registro destino.
 
 ### 7.6 Memorias ROM y RAM
 
+Las memorias se implementan en `program_rom.sv` y `data_ram.sv`.
+
 #### Entradas y salidas
+
+**ROM**
+
+| Elemento | Tipo | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `INIT_FILE` | Parámetro | Cadena | Ruta del archivo hexadecimal |
+| `addr_i` | Entrada | 32 bits | Dirección de byte de la instrucción |
+| `instr_o` | Salida | 32 bits | Instrucción leída |
+
+**RAM**
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `clk_i` | Entrada | 1 bit | Reloj de escritura |
+| `we_i` | Entrada | 1 bit | Habilitación de escritura |
+| `addr_i` | Entrada | 10 bits | Índice local de palabra |
+| `wdata_i` | Entrada | 32 bits | Dato a escribir |
+| `rdata_o` | Salida | 32 bits | Dato leído |
 
 #### Funcionamiento
 
-<!-- Sugerencia: tamaños, inicialización de la ROM, acceso de la RAM y alineación. -->
+La ROM contiene 2048 palabras de 32 bits, equivalentes a 8 KiB. Se inicializa con instrucciones NOP y, cuando se especifica `INIT_FILE`, carga el archivo mediante `$readmemh`.
+
+Su lectura es combinacional. Para direcciones alineadas menores que `0x00002000`, selecciona la palabra mediante `addr_i[12:2]`. Una dirección inválida devuelve NOP.
+
+La RAM contiene 1024 palabras de 32 bits, equivalentes a 4 KiB. Su dirección de entrada es un índice de palabra, no una dirección global de byte. El subsistema selecciona el rango `0x00002000–0x00002FFF` y utiliza los bits `[11:2]` para obtener el índice.
+
+La lectura de RAM es combinacional y la escritura ocurre en el flanco ascendente cuando `we_i=1`. La memoria no se borra durante reset ni tiene inicialización automática de datos.
 
 #### Relación con el sistema
+
+La ROM proporciona el programa que ejecuta el núcleo. La RAM almacena variables y estructuras de datos utilizadas por ese programa.
+
+Los buses separados permiten buscar instrucciones y acceder a datos durante el mismo ciclo. El archivo `handoff.hex` incluido en la entrega contiene un diagnóstico de RAM y MMIO, no el programa completo de Batalla Naval.
 
 ### 7.7 Decodificador de direcciones y multiplexor de lectura
 
+En la entrega local, la selección de RAM y del espacio MMIO se encuentra dentro de `processor_subsystem.sv`. La decodificación individual de cada periférico corresponde a la interconexión externa del equipo.
+
 #### Entradas y salidas
+
+Las señales internas utilizadas por la lógica son:
+
+| Señal | Origen o destino | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `address` | Desde el núcleo | 32 bits | Dirección de datos |
+| `wdata` | Desde el núcleo | 32 bits | Dato de escritura |
+| `core_we` | Desde el núcleo | 1 bit | Solicitud de escritura |
+| `ram_data` | Desde RAM | 32 bits | Dato leído de RAM |
+| `rdata` | Hacia el núcleo | 32 bits | Dato seleccionado |
+
+La interfaz MMIO externa es:
+
+| Señal | Dirección | Ancho | Descripción |
+| --- | --- | --- | --- |
+| `mmio_rdata_i` | Entrada | 32 bits | Lectura seleccionada por la interconexión externa |
+| `mmio_addr_o` | Salida | 32 bits | Dirección completa de byte |
+| `mmio_wdata_o` | Salida | 32 bits | Dato de escritura |
+| `mmio_sel_o` | Salida | 1 bit | Selección válida del espacio MMIO |
+| `mmio_we_o` | Salida | 1 bit | Escritura MMIO habilitada |
 
 #### Funcionamiento
 
-<!-- Sugerencia: cómo se generan las selecciones y habilitaciones de escritura y cómo se
-elige el dato de lectura. -->
+La lógica verifica primero que los dos bits inferiores de la dirección sean cero. Esto identifica accesos alineados a palabras de cuatro bytes.
+
+| Recurso | Condición de selección |
+| --- | --- |
+| RAM | Dirección alineada desde `0x00002000` hasta `0x00002FFF` |
+| MMIO | Dirección alineada desde `0x00010000` hasta `0x0001FFFF`, fuera de reset |
+
+La escritura RAM requiere `core_we`, selección RAM y reset inactivo. La escritura MMIO se obtiene mediante:
+
+```systemverilog
+assign mmio_we_o = core_we && mmio_sel_o;
+```
+
+El multiplexor devuelve el dato de RAM cuando está seleccionada, el dato MMIO cuando corresponde a ese espacio y cero en los demás casos:
+
+```systemverilog
+assign rdata = ram_sel ? ram_data :
+               (mmio_sel_o ? mmio_rdata_i : 32'b0);
+```
+
+Los accesos de datos desalineados se ignoran al escribir y devuelven cero al leer. No generan una excepción.
+
+`mmio_sel_o` depende de la dirección, no de una señal de lectura. Por ello, no debe emplearse por sí sola para consumir datos UART o limpiar banderas.
 
 #### Relación con el sistema
+
+La interconexión externa identifica el periférico específico, habilita únicamente su escritura y selecciona su dato de lectura. Si una dirección MMIO no corresponde a ningún dispositivo, esa interconexión debe devolver cero.
 
 ---
 
