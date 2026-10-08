@@ -925,7 +925,7 @@ j2_shot_store:
     slli    a3, t1, 2
     add     a2, a2, a3
     add     a2, a2, t2
-    addi    a2, a2, 61           # offset tablero: 3 filas * 20 + 1 columna
+    addi    a2, a2, 121          # offset tablero: 6 filas * 20 + 1 columna
     slli    a2, a2, 2
     add     a2, s2, a2
 
@@ -1012,6 +1012,7 @@ j2_shot_send_result:
     # Se recorren BOARD_J1 y SHOTS_J2. J2 gana cuando toda celda
     # perteneciente a un barco de J1 contiene CELL_HIT.
     # ------------------------------------------------------------
+    jal     t5, update_vga_stats
     jal     ra, check_win_j2
     bne     a0, zero, win_j2
 
@@ -1281,7 +1282,7 @@ shot_j1_store:
 
     addi    a3, t2, 10
     add     a2, a2, a3
-    addi    a2, a2, 61           # offset tablero: 3 filas * 20 + 1 columna
+    addi    a2, a2, 121          # offset tablero: 6 filas * 20 + 1 columna
 
     slli    a2, a2, 2
     add     a2, s2, a2
@@ -1369,6 +1370,7 @@ shot_j1_send_result:
     # Se recorren BOARD_J2 y SHOTS_J1. J1 gana cuando toda celda
     # perteneciente a un barco de J2 contiene CELL_HIT.
     # ------------------------------------------------------------
+    jal     t5, update_vga_stats
     jal     ra, check_win_j1
     bne     a0, zero, win_j1
 
@@ -1673,7 +1675,7 @@ place_loop:
     slli    a7, a4, 2            # fila*4
     add     a6, a6, a7           # fila*20
     add     a6, a6, a5
-    addi    a6, a6, 61           # offset tablero: 3 filas * 20 + 1 columna
+    addi    a6, a6, 121          # offset tablero: 6 filas * 20 + 1 columna
     slli    a6, a6, 2            # byte offset VGA
     add     a6, s2, a6
 
@@ -1778,6 +1780,15 @@ invalid_placement:
 update_display:
     # Convertir victorias J1 a dos digitos decimales.
     lw      t0, 32(s0)
+
+    # Limitar marcador J1 a dos digitos (modulo 100).
+update_display_j1_mod:
+    addi    t2, zero, 100
+    blt     t0, t2, update_display_j1_mod_done
+    addi    t0, t0, -100
+    jal     zero, update_display_j1_mod
+
+update_display_j1_mod_done:
     addi    t1, zero, 0          # Decenas J1
 
 update_display_j1_div:
@@ -1788,10 +1799,6 @@ update_display_j1_div:
     jal     zero, update_display_j1_div
 
 update_display_j1_ready:
-    # Apagar decenas si son cero.
-    bne     t1, zero, update_display_j1_pack
-    addi    t1, zero, 15
-
 update_display_j1_pack:
     slli    t1, t1, 12
     slli    t0, t0, 8
@@ -1799,6 +1806,15 @@ update_display_j1_pack:
 
     # Convertir victorias J2 a dos digitos decimales.
     lw      t0, 36(s0)
+
+    # Limitar marcador J2 a dos digitos (modulo 100).
+update_display_j2_mod:
+    addi    t2, zero, 100
+    blt     t0, t2, update_display_j2_mod_done
+    addi    t0, t0, -100
+    jal     zero, update_display_j2_mod
+
+update_display_j2_mod_done:
     addi    t1, zero, 0          # Decenas J2
 
 update_display_j2_div:
@@ -1809,10 +1825,6 @@ update_display_j2_div:
     jal     zero, update_display_j2_div
 
 update_display_j2_ready:
-    # Apagar decenas si son cero.
-    bne     t1, zero, update_display_j2_pack
-    addi    t1, zero, 15
-
 update_display_j2_pack:
     slli    t1, t1, 4
     or      t3, t3, t1
@@ -1820,6 +1832,9 @@ update_display_j2_pack:
 
     # DISPLAY = 0x00010130.
     sw      t3, 0x130(s1)
+
+    # Actualizar tambien el marcador VGA.
+    jal     t5, update_vga_score
 
     jalr    zero, 0(t6)
 
@@ -1845,6 +1860,316 @@ update_display_j2_pack:
 #
 # Retorno mediante t6 para no alterar ra.
 # ============================================================================
+# ============================================================================
+# update_vga_score
+#
+# Marcador VGA, fila 2:
+#   J1: X        J2: Y
+#
+# Retorno mediante t5.
+# ============================================================================
+
+
+# ============================================================================
+# update_vga_score
+# Victorias de ambos jugadores en formato decimal de dos digitos.
+# Retorno: t5.
+# ============================================================================
+
+update_vga_score:
+
+    # Victorias J1: modulo 100.
+    lw      t2, 32(s0)
+    addi    t3, zero, 100
+
+score_j1_mod:
+    blt     t2, t3, score_j1_convert
+    addi    t2, t2, -100
+    jal     zero, score_j1_mod
+
+score_j1_convert:
+    addi    t3, zero, 0
+
+score_j1_tens:
+    addi    t4, zero, 10
+    blt     t2, t4, score_j1_draw
+    addi    t2, t2, -10
+    addi    t3, t3, 1
+    jal     zero, score_j1_tens
+
+score_j1_draw:
+    # Fila 2, columna 2.
+    li      t0, 168
+    add     t0, s2, t0
+
+    li      t1, 0xA50
+    sw      t1, 0(t0)
+
+    li      t1, 0x988
+    sw      t1, 4(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 8(t0)
+
+    # Decenas.
+    addi    t3, t3, 48
+    slli    t3, t3, 3
+    li      t1, 0x800
+    or      t3, t3, t1
+    sw      t3, 12(t0)
+
+    # Unidades.
+    addi    t2, t2, 48
+    slli    t2, t2, 3
+    or      t2, t2, t1
+    sw      t2, 16(t0)
+
+    # Victorias J2: modulo 100.
+    lw      t2, 36(s0)
+    addi    t3, zero, 100
+
+score_j2_mod:
+    blt     t2, t3, score_j2_convert
+    addi    t2, t2, -100
+    jal     zero, score_j2_mod
+
+score_j2_convert:
+    addi    t3, zero, 0
+
+score_j2_tens:
+    addi    t4, zero, 10
+    blt     t2, t4, score_j2_draw
+    addi    t2, t2, -10
+    addi    t3, t3, 1
+    jal     zero, score_j2_tens
+
+score_j2_draw:
+    # Fila 2, columna 12.
+    li      t0, 208
+    add     t0, s2, t0
+
+    li      t1, 0xA50
+    sw      t1, 0(t0)
+
+    li      t1, 0x990
+    sw      t1, 4(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 8(t0)
+
+    # Decenas.
+    addi    t3, t3, 48
+    slli    t3, t3, 3
+    li      t1, 0x800
+    or      t3, t3, t1
+    sw      t3, 12(t0)
+
+    # Unidades.
+    addi    t2, t2, 48
+    slli    t2, t2, 3
+    or      t2, t2, t1
+    sw      t2, 16(t0)
+
+    jalr    zero, 0(t5)
+
+
+# ============================================================================
+# update_vga_stats
+#
+# Recorre SHOTS_J1 y SHOTS_J2 (64 palabras cada una).
+# CELL_HIT  = 2 -> acierto
+# CELL_MISS = 3 -> fallo
+#
+# J1: fila 4, columnas 0..8
+# J2: fila 4, columnas 11..19
+#
+# Retorno: t5.
+# Utiliza a0 para comparaciones. Conserva t5 y t6.
+# ============================================================================
+
+update_vga_stats:
+
+    # Contar aciertos y fallos de J1.
+    li      t0, 768
+    add     t0, s0, t0
+    addi    t1, zero, 64
+    addi    t2, zero, 0       # Aciertos
+    addi    t3, zero, 0       # Fallos
+
+stats_j1_loop:
+    lw      t4, 0(t0)
+    addi    t0, t0, 4
+
+    addi    a0, zero, 2
+    beq     t4, a0, stats_j1_hit
+
+    addi    a0, zero, 3
+    beq     t4, a0, stats_j1_miss
+    jal     zero, stats_j1_next
+
+stats_j1_hit:
+    addi    t2, t2, 1
+    jal     zero, stats_j1_next
+
+stats_j1_miss:
+    addi    t3, t3, 1
+
+stats_j1_next:
+    addi    t1, t1, -1
+    bne     t1, zero, stats_j1_loop
+
+    # Escribir etiquetas.
+    li      t0, 320
+    add     t0, s2, t0
+
+    li      t1, 0xA08
+    sw      t1, 0(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 4(t0)
+
+    li      t1, 0xA30
+    sw      t1, 20(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 24(t0)
+
+    # Convertir aciertos a decenas y unidades.
+    addi    t4, zero, 0
+
+stats_j1_hit_tens:
+    addi    t1, zero, 10
+    blt     t2, t1, stats_j1_hit_draw
+    addi    t2, t2, -10
+    addi    t4, t4, 1
+    jal     zero, stats_j1_hit_tens
+
+stats_j1_hit_draw:
+    addi    t4, t4, 48
+    slli    t4, t4, 3
+    li      t1, 0x800
+    or      t4, t4, t1
+    sw      t4, 8(t0)
+
+    addi    t2, t2, 48
+    slli    t2, t2, 3
+    or      t2, t2, t1
+    sw      t2, 12(t0)
+
+    # Convertir fallos a decenas y unidades.
+    addi    t4, zero, 0
+
+stats_j1_miss_tens:
+    addi    t1, zero, 10
+    blt     t3, t1, stats_j1_miss_draw
+    addi    t3, t3, -10
+    addi    t4, t4, 1
+    jal     zero, stats_j1_miss_tens
+
+stats_j1_miss_draw:
+    addi    t4, t4, 48
+    slli    t4, t4, 3
+    li      t1, 0x800
+    or      t4, t4, t1
+    sw      t4, 28(t0)
+
+    addi    t3, t3, 48
+    slli    t3, t3, 3
+    or      t3, t3, t1
+    sw      t3, 32(t0)
+
+    # Contar aciertos y fallos de J2.
+    li      t0, 1024
+    add     t0, s0, t0
+    addi    t1, zero, 64
+    addi    t2, zero, 0       # Aciertos
+    addi    t3, zero, 0       # Fallos
+
+stats_j2_loop:
+    lw      t4, 0(t0)
+    addi    t0, t0, 4
+
+    addi    a0, zero, 2
+    beq     t4, a0, stats_j2_hit
+
+    addi    a0, zero, 3
+    beq     t4, a0, stats_j2_miss
+    jal     zero, stats_j2_next
+
+stats_j2_hit:
+    addi    t2, t2, 1
+    jal     zero, stats_j2_next
+
+stats_j2_miss:
+    addi    t3, t3, 1
+
+stats_j2_next:
+    addi    t1, t1, -1
+    bne     t1, zero, stats_j2_loop
+
+    # Escribir etiquetas.
+    li      t0, 364
+    add     t0, s2, t0
+
+    li      t1, 0xA08
+    sw      t1, 0(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 4(t0)
+
+    li      t1, 0xA30
+    sw      t1, 20(t0)
+
+    li      t1, 0x9D0
+    sw      t1, 24(t0)
+
+    # Convertir aciertos a decenas y unidades.
+    addi    t4, zero, 0
+
+stats_j2_hit_tens:
+    addi    t1, zero, 10
+    blt     t2, t1, stats_j2_hit_draw
+    addi    t2, t2, -10
+    addi    t4, t4, 1
+    jal     zero, stats_j2_hit_tens
+
+stats_j2_hit_draw:
+    addi    t4, t4, 48
+    slli    t4, t4, 3
+    li      t1, 0x800
+    or      t4, t4, t1
+    sw      t4, 8(t0)
+
+    addi    t2, t2, 48
+    slli    t2, t2, 3
+    or      t2, t2, t1
+    sw      t2, 12(t0)
+
+    # Convertir fallos a decenas y unidades.
+    addi    t4, zero, 0
+
+stats_j2_miss_tens:
+    addi    t1, zero, 10
+    blt     t3, t1, stats_j2_miss_draw
+    addi    t3, t3, -10
+    addi    t4, t4, 1
+    jal     zero, stats_j2_miss_tens
+
+stats_j2_miss_draw:
+    addi    t4, t4, 48
+    slli    t4, t4, 3
+    li      t1, 0x800
+    or      t4, t4, t1
+    sw      t4, 28(t0)
+
+    addi    t3, t3, 48
+    slli    t3, t3, 3
+    or      t3, t3, t1
+    sw      t3, 32(t0)
+
+    jalr    zero, 0(t5)
+
+
 update_vga_cursor:
     lw      t0, 0(s0)            # GAME_STATE
 
@@ -1892,6 +2217,66 @@ update_cursor_position:
 
 update_cursor_hide:
     sw      zero, 0x148(s1)
+    jalr    zero, 0(t6)
+
+
+
+# ============================================================================
+# draw_vga_title
+#
+# Escribe "BATALLA NAVAL" en la fila 0, columnas 4 a 16.
+#
+# Formato de tile:
+#   bit 11      = habilitar texto
+#   bits [10:3] = ASCII
+#   bits [2:0]  = color
+#
+# Retorno mediante t6.
+# ============================================================================
+draw_vga_title:
+    # BATALLA NAVAL: fila 0, columnas 4 a 16.
+    # Tile = 0x800 | (ASCII << 3).
+    # Retorno mediante t6.
+
+    addi    t0, s2, 16
+
+    li    t1, 0xA10     # B
+    sw      t1, 0(t0)
+
+    li    t1, 0xA08     # A
+    sw      t1, 4(t0)
+
+    li    t1, 0xAA0     # T
+    sw      t1, 8(t0)
+
+    li    t1, 0xA08     # A
+    sw      t1, 12(t0)
+
+    li    t1, 0xA60     # L
+    sw      t1, 16(t0)
+    sw      t1, 20(t0)
+
+    li    t1, 0xA08     # A
+    sw      t1, 24(t0)
+
+    li    t1, 0x900     # Espacio
+    sw      t1, 28(t0)
+
+    li    t1, 0xA70     # N
+    sw      t1, 32(t0)
+
+    li    t1, 0xA08     # A
+    sw      t1, 36(t0)
+
+    li    t1, 0xAB0     # V
+    sw      t1, 40(t0)
+
+    li    t1, 0xA08     # A
+    sw      t1, 44(t0)
+
+    li    t1, 0xA60     # L
+    sw      t1, 48(t0)
+
     jalr    zero, 0(t6)
 
 
@@ -1968,6 +2353,9 @@ clear_vga:
     addi    t1, t1, -1
     bne     t1, zero, clear_vga
 
+    # Dibujar titulo del HUD.
+    jal     t6, draw_vga_title
+
     # Mostrar cursor inicial sobre J1 en (0,0).
     jal     t6, update_vga_cursor
 
@@ -1978,5 +2366,8 @@ clear_vga:
     # Mostrar marcador actual. Los contadores de victorias no se
     # borran en init_game, por lo que BTN_RST conserva el marcador.
     jal     t6, update_display
+
+    # Mostrar A:00 F:00 al iniciar la partida.
+    jal     t5, update_vga_stats
 
     jalr    zero, 0(ra)
