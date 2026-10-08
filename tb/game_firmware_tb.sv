@@ -9,7 +9,7 @@ module game_firmware_tb;
 
     wire uart_tx_o;
     wire [6:0] seg_o;
-    wire [3:0] anode_o;
+    wire [7:0] anode_o;
     wire [2:0] led_o;
     wire buzz_pwm_o;
     wire hsync_o;
@@ -547,7 +547,20 @@ module game_firmware_tb;
         if (led_o !== 3'b001)
             $fatal(1, "Timeout init_game PC=%h", dut.pc_internal);
 
-        repeat (10) @(negedge clk_i);
+        // Esperar a que init_game termine y la CPU llegue
+        // por primera vez a la lectura MMIO de botones.
+        cycles = 0;
+        while (!((dut.mmio_addr == 32'h0001_0120) &&
+                 (dut.mmio_sel  == 1'b1) &&
+                 (dut.mmio_we   == 1'b0)) &&
+               (cycles < 15000)) begin
+            @(negedge clk_i);
+            cycles = cycles + 1;
+        end
+
+        if (cycles >= 15000)
+            $fatal(1, "Timeout esperando main_loop: PC=%h",
+                   dut.pc_internal);
 
         expect_ram(0, 32'd0);  // GAME_STATE
         expect_ram(2, 32'd0);  // CURSOR_ROW
@@ -565,7 +578,9 @@ module game_firmware_tb;
             expect_ram(256+i, 32'd0);  // SHOTS_J2  0x2400
         end
 
-        for (i = 0; i < 300; i = i + 1)
+        // Las primeras 60 posiciones contienen el HUD.
+        // Verificar que el area de los tableros inicia vacia.
+        for (i = VGA_BOARD_OFFSET; i < 300; i = i + 1)
             expect_vga(i, 32'd0);
 
         $display("PASS 1: inicializacion");
@@ -2880,15 +2895,15 @@ module game_firmware_tb;
         expect_ram(8, 32'd2);
         expect_ram(9, 32'd1);
 
-        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_F2F1) begin
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0201) begin
             $display(
-                "ERROR PASS29: DISPLAY esperado=0000F2F1 obtenido=%h",
+                "ERROR PASS29: DISPLAY esperado=00000201 obtenido=%h",
                 dut.u_locales.u_seg7_ctrl.rdata_o
             );
             errors = errors + 1;
         end
 
-        $display("PASS 29: display MMIO muestra marcador J1=2 J2=1 -> F2F1");
+        $display("PASS 29: display MMIO muestra marcador J1=2 J2=1 -> 0201");
 
         // ============================================================
         // 30. PARTIDA COMPLETA END-TO-END
@@ -3035,9 +3050,9 @@ module game_firmware_tb;
         expect_ram(8, 32'd3); // WINS_J1: 2 -> 3
         expect_ram(9, 32'd1); // WINS_J2 permanece 1
 
-        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_F3F1) begin
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0301) begin
             $display(
-                "ERROR PASS30 DISPLAY: esperado=0000F3F1 obtenido=%h",
+                "ERROR PASS30 DISPLAY: esperado=00000301 obtenido=%h",
                 dut.u_locales.u_seg7_ctrl.rdata_o
             );
             errors = errors + 1;
@@ -3057,7 +3072,7 @@ module game_firmware_tb;
         expect_ram(244, 32'd2); // (6,4)
         expect_ram(252, 32'd2); // (7,4)
 
-        $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=F3F1");
+        $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=0301");
 
         if (errors != 0)
             $fatal(1,
