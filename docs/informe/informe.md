@@ -1,47 +1,14 @@
 # Informe técnico: Batalla Naval — juego de dos jugadores sobre un microprocesador RISC-V con periférico VGA
 
-<!--
-PLANTILLA — Proyecto 3, EL3313 Taller de Diseño Digital
-
-Convención de esta plantilla:
-  - Cada sección trae su título y un comentario "Sugerencia" con lo que conviene
-    incluir. Reemplazar el comentario por el contenido y borrar el comentario.
-  - Solo la Introducción (1.1) y los Objetivos (2) vienen redactados, porque
-    salen directamente del enunciado.
-
-Categorías de la rúbrica "Documentación técnica (informe)":
-  - Fundamentación teórica ........................ 20%
-  - Presentación de resultados ..................... 30%
-  - Análisis e interpretación de resultados ........ 25%
-  - Conclusiones y aprendizaje obtenido ............ 15%
-  - Calidad y organización del documento ........... 10%
-
-Reglas de formato:
-  - Jerarquía de encabezados consistente: ## secciones, ### subsecciones,
-    #### sub-subsecciones (p. ej. "Entradas y salidas", "Funcionamiento",
-    "Relación con el sistema" dentro de cada módulo). Nunca usar "##" para estos.
-  - Cada figura, tabla o forma de onda lleva numeración y una leyenda que explica
-    qué muestra y qué se debe observar en ella.
-  - La sección de resultados (12) solo presenta datos y evidencia; la
-    interpretación crítica va en la sección 13.
-  - Los nombres de módulos deben coincidir exactamente con los del código final.
-  - Borrar todos los comentarios antes de la entrega.
-
-Lista de verificación antes de entregar (lecciones de informes anteriores):
-  [ ] Existe una sección explícita de presentación de resultados (sección 12).
-  [ ] Se incluye el uso de recursos (LUT, FF, BRAM, DSP, IO) copiado del reporte de Vivado.
-  [ ] Se incluye el análisis de timing (WNS, TNS, hold slack) copiado del reporte.
-  [ ] Se incluye al menos una fotografía del sistema físico en la FPGA.
-  [ ] Se sigue la estructura sugerida y los niveles de encabezado son consistentes.
--->
 
 ## Resumen
 
-<!-- Sugerencia: escribirlo al final. Uno o dos párrafos que cubran qué se construyó
-(procesador, memorias, periféricos, programa en ensamblador, aplicación de PC),
-cómo se reparte el trabajo entre hardware, software y PC, qué se logró demostrar
-(simulación, síntesis, timing, partida completa en la tarjeta) y qué limitaciones
-quedaron. Citar solo cifras que aparezcan en la sección 12. -->
+Este informe documenta el diseño e implementación de un juego de Batalla Naval para dos jugadores sobre una FPGA Nexys 4 Rev. B. El sistema comprende un procesador RISC-V rv32i de ciclo único (29 instrucciones) con memorias ROM de 8 KiB y RAM de 4 KiB en buses independientes, una interconexión de periféricos mapeados en memoria y seis periféricos: video VGA 640×480@60 Hz basado en un mapa de 20×15 tiles con reloj de píxel de 25 MHz generado por PLL, entradas del Jugador 1 con antirrebote, UART a 115 200 baudios, displays de 7 segmentos, LED de estado y buzzer. Toda la lógica del juego —colocación concurrente de barcos, turnos, validación de disparos, detección de hundidos, victoria y reinicio— reside en un programa en ensamblador de 1109 instrucciones (54 % de la ROM), mientras que el Jugador 2 participa desde una aplicación de PC en Python (Tkinter y pyserial) que actúa como terminal remota sin lógica de juego y se comunica mediante un protocolo ASCII por líneas.
+
+El hardware se verificó con 23 testbenches autoverificables en Icarus Verilog (procesador, interconexión, VGA, entradas, UART, displays, LED, buzzer y sistema completo) y la aplicación con 59 pruebas unitarias; 22 testbenches y todas las pruebas unitarias terminan en PASS y el restante (`game_firmware_tb`) falla solo en 42 comprobaciones de posición de tiles VGA del banco de prueba del firmware, que están desactualizadas respecto del HUD (Sección 13.6); una partida completa simulada sobre el sistema termina con la victoria esperada y el marcador correcto. El procesador confirma una instrucción cada 4 ciclos de reloj (25 MIPS máximos) y el VGA genera un refresco teórico de 59,52 Hz. Las limitaciones actuales son que los reportes de síntesis, utilización y timing de Vivado, la simulación post-implementación y la evidencia física en la tarjeta están pendientes de incorporarse (Sección 12).
+
+<!-- PENDIENTE: actualizar el resumen con la utilización de recursos, el WNS y los resultados de la prueba física cuando existan -->
+
 
 ---
 
@@ -405,8 +372,6 @@ El sistema se implementa en la tarjeta **Digilent Nexys 4 Rev. B** (FPGA Xilinx 
 
 ## 4. Fundamentación teórica
 
-<!-- Sugerencia general: peso 20% de la rúbrica. Cada subsección debe terminar conectando
-el concepto con lo implementado en el proyecto; no basta con teoría abstracta. -->
 
 ### 4.1 Arquitectura RISC-V y el subconjunto rv32i
 
@@ -967,8 +932,6 @@ La interconexión externa identifica el periférico específico, habilita única
 
 ## 8. Periféricos
 
-<!-- Sugerencia general: incluir al inicio de la sección los diagramas de tercer nivel de
-los periféricos. -->
 
 ### 8.1 Periférico VGA
 
@@ -1383,151 +1346,317 @@ Las 59 pruebas unitarias de `pc/tests` verifican estos casos.
 
 ## 11. Asignación de pines
 
-<!-- Sugerencia: tabla copiada del archivo de restricciones (señal, pin, estándar) que cubra
-reloj, botones, UART, VGA, displays, LED y buzzer. -->
+**Tabla 11.1.** Asignación de pines (`constraints/nexys4.xdc`, Nexys 4 Rev. B).
+
+| Señal | Pin | Estándar | Función |
+|---|---|---|---|
+| `clk_i` | E3 | LVCMOS33 | Reloj de 100 MHz |
+| `r_o[0]` | A3 | LVCMOS33 | VGA rojo |
+| `r_o[1]` | B4 | LVCMOS33 | VGA rojo |
+| `r_o[2]` | C5 | LVCMOS33 | VGA rojo |
+| `r_o[3]` | A4 | LVCMOS33 | VGA rojo |
+| `g_o[0]` | C6 | LVCMOS33 | VGA verde |
+| `g_o[1]` | A5 | LVCMOS33 | VGA verde |
+| `g_o[2]` | B6 | LVCMOS33 | VGA verde |
+| `g_o[3]` | A6 | LVCMOS33 | VGA verde |
+| `b_o[0]` | B7 | LVCMOS33 | VGA azul |
+| `b_o[1]` | C7 | LVCMOS33 | VGA azul |
+| `b_o[2]` | D7 | LVCMOS33 | VGA azul |
+| `b_o[3]` | D8 | LVCMOS33 | VGA azul |
+| `hsync_o` | B11 | LVCMOS33 | VGA HSYNC |
+| `vsync_o` | B12 | LVCMOS33 | VGA VSYNC |
+| `rst_ni` | C12 | LVCMOS33 | CPU RESET (activo en bajo) |
+| `btn_raw_i[0]` | F15 | LVCMOS33 | BTNU - arriba |
+| `btn_raw_i[1]` | V10 | LVCMOS33 | BTND - abajo |
+| `btn_raw_i[2]` | T16 | LVCMOS33 | BTNL - izquierda |
+| `btn_raw_i[3]` | R10 | LVCMOS33 | BTNR - derecha |
+| `btn_raw_i[4]` | U9 | LVCMOS33 | SW0 - SEL |
+| `btn_raw_i[5]` | E16 | LVCMOS33 | BTNC - OK |
+| `btn_raw_i[6]` | U8 | LVCMOS33 | SW1 - RST del juego (software) |
+| `seg_o[0]` | L3 | LVCMOS33 | CA |
+| `seg_o[1]` | N1 | LVCMOS33 | CB |
+| `seg_o[2]` | L5 | LVCMOS33 | CC |
+| `seg_o[3]` | L4 | LVCMOS33 | CD |
+| `seg_o[4]` | K3 | LVCMOS33 | CE |
+| `seg_o[5]` | M2 | LVCMOS33 | CF |
+| `seg_o[6]` | L6 | LVCMOS33 | CG |
+| `anode_o[0]` | N6 | LVCMOS33 | AN0 - unidades J2 |
+| `anode_o[1]` | M6 | LVCMOS33 | AN1 - decenas J2 |
+| `anode_o[2]` | M3 | LVCMOS33 | AN2 - unidades J1 |
+| `anode_o[3]` | N5 | LVCMOS33 | AN3 - decenas J1 |
+| `anode_o[4]` | N2 | LVCMOS33 | AN4 - apagado |
+| `anode_o[5]` | N4 | LVCMOS33 | AN5 - apagado |
+| `anode_o[6]` | L1 | LVCMOS33 | AN6 - apagado |
+| `anode_o[7]` | M1 | LVCMOS33 | AN7 - apagado |
+| `led_o[0]` | T8 | LVCMOS33 | LED de estado |
+| `led_o[1]` | V9 | LVCMOS33 | LED de estado |
+| `led_o[2]` | R8 | LVCMOS33 | LED de estado |
+| `buzz_pwm_o` | B13 | LVCMOS33 | JA1 |
+| `uart_rx_i` | C4 | LVCMOS33 | UART PC → FPGA |
+| `uart_tx_o` | D4 | LVCMOS33 | UART FPGA → PC |
+| `dp_o` | M4 | LVCMOS33 | DP apagado |
+
+
+Observaciones: los siete controles lógicos del Jugador 1 se asignan a cuatro pulsadores de navegación (`btn_raw_i[0..3]`), BTNC (OK, `btn_raw_i[5]`) y dos interruptores (SW0 = SEL en `btn_raw_i[4]` y SW1 = RST de la partida en `btn_raw_i[6]`). El botón rojo CPU RESET (`rst_ni`) es activo en bajo y se invierte dentro de `sistema_top`. Los pines AN4–AN7 se asignan pero permanecen apagados.
 
 ---
 
 ## 12. Presentación de resultados
 
-<!--
-Sugerencia general: peso 30% de la rúbrica. Debe ser explícita y autocontenida, y solo
-mostrar evidencia (sin análisis crítico; eso va en la sección 13). Mínimo obligatorio:
-  (a) simulaciones autoverificables del núcleo y de los periféricos,
-  (b) simulación post-implementación temporizada (fragmento del programa y validación de un disparo),
-  (c) evidencia física: VGA, aplicación de PC, buzzer, displays y LED,
-  (d) evidencia de que ningún jugador ve la flota del otro,
-  (e) fotografía del sistema completo en la FPGA,
-  (f) utilización de recursos y timing copiados literalmente de los reportes de Vivado.
--->
 
 ### 12.1 Verificación por simulación
 
+Todas las simulaciones se ejecutaron con Icarus Verilog 12.0 (`iverilog -g2012`, `vvp`) y Python 3 desde el repositorio sin modificar el RTL ni los testbenches, salvo las dos adaptaciones indicadas más abajo. El tiempo simulado se obtiene de la línea `$finish` de cada ejecución.
+
 #### Testbenches
 
-<!-- Sugerencia: tabla (Testbench | Qué verifica | Resultado) para núcleo, memorias,
-interconexión, VGA, entradas, UART, displays/buzzer y sistema completo. -->
+**Tabla 12.1.** Testbenches autoverificables y su resultado.
+
+| Testbench | Qué verifica | Resultado |
+|---|---|---|
+| `tb_stage3` | PC, reset, PC+4 y selección de multiplexores | PASS, 22 comprobaciones (*) |
+| `tb_stage4` | Decodificador de campos, control, instrucciones inválidas y destinos de salto | PASS, 80 comprobaciones |
+| `tb_riscv_core` | Núcleo integrado, 27 instrucciones originales | PASS, 25 escrituras verificadas, 71 ciclos (*) |
+| `tb_core_edges` | LUI/AUIPC, x0, reset y límites de inmediatos y desplazamientos | PASS, 10 stores (*) |
+| `tb_processor_subsystem` | Núcleo con ROM y RAM, extremos de RAM, MMIO externo y reset | PASS, 3 escrituras MMIO (*) |
+| `address_decoder_tb` | Selección y habilitación de escritura por rango de direcciones | PASS |
+| `read_mux_tb` | Prioridad del multiplexor de lectura y valor 0 por defecto | PASS |
+| `mmio_interconnect_tb` | Decodificador y multiplexor integrados | PASS |
+| `vga_timing_tb` | Contadores, `hsync`, `vsync`, `video_on` durante un cuadro completo | PASS, 420 000 ciclos de píxel (16,8 ms) |
+| `vga_memory_tb` | Escritura por CPU, lectura por video y direccionamiento de tiles | PASS |
+| `vga_color_rgb_tb` | Colores de casillas, cuadrícula, texto y negro fuera de zona visible | PASS |
+| `btn_input_tb` | Sincronización, antirrebote, flancos, ACK y BTN_RST | PASS, 9 comprobaciones |
+| `seg7_ctrl_tb` | Multiplexado, decodificación y polaridad de ánodos/segmentos | PASS, 5 comprobaciones |
+| `led_reg_tb` | Escritura, retención, máscara de 3 bits, lectura y reset | PASS, 7 comprobaciones |
+| `buzzer_gen_tb` | Los 5 eventos, interrupción por nueva orden, escritura sin inicio y reset | PASS, 8 comprobaciones |
+| `perifericos_locales_tb` | Independencia entre botones, display, LED y buzzer, y reset global | PASS, 5 comprobaciones |
+| `baud_gen_tb` | Intervalo y ancho de `baud_tick` | PASS, 7 comprobaciones |
+| `uart_tx_tb` | Transmisión de 0xA5, `tx_busy` y `tx_done` | PASS, 2 comprobaciones |
+| `uart_rx_tb` | Recepción, bit de parada inválido y reinicio | PASS, 3 comprobaciones |
+| `uart_loopback_tb` | TX → RX con 0x00, 0xA5, 0x55, 0xAA y 0xFF | PASS, 5 bytes |
+| `uart_peripheral_tb` | Registros STATUS/TX/RX, limpieza de `RX_VALID` y dirección inválida | PASS, 9 comprobaciones |
+| `sistema_top_tb` | Sistema completo con `handoff.hex`: CPU, RAM, MMIO, entradas, LED y VGA | PASS (*) |
+| `game_firmware_tb` | Firmware `game.hex` completo en el sistema | 30 etapas lógicas PASS; 42 comprobaciones de tiles VGA fallan (ver Sección 13.6) (*) |
+| `pc/tests` (`unittest`) | Protocolo, estado, enlace serial y flujo de partida | OK, 59 pruebas |
+
+(*) Adaptación para ejecutar con Icarus: los testbenches `tb_stage3`, `tb_riscv_core`, `tb_core_edges` y `tb_processor_subsystem` se ejecutaron con una copia temporal que declara `logic ce_i = 1` (los originales no conectan el puerto `ce_i` del núcleo, agregado después); `sistema_top_tb` y `game_firmware_tb` se ejecutaron con una copia temporal de `sistema_top.sv` en la que un `logic` conducido por una instancia se declara `wire` (limitación de Icarus) y con un modelo de comportamiento de `clk_wiz_pixel`.
 
 #### Resultado de los testbenches autoverificables
 
-<!-- Sugerencia: captura de consola con PASS/FAIL y número de comprobaciones. -->
+Extractos de la consola de simulación:
+
+```text
+$ vvp tb_riscv_core.vvp
+PASS: core integrado, 27 instrucciones, 25 escrituras verificadas, 71 ciclos
+
+$ vvp vga_timing.vvp
+PASS: vga_timing supero 420000 ciclos de un frame completo.
+
+$ vvp uart_loopback.vvp
+PASS: loopback 0x00 -> 0x00
+PASS: loopback 0xa5 -> 0xa5
+PASS: loopback 0x55 -> 0x55
+PASS: loopback 0xaa -> 0xaa
+PASS: loopback 0xff -> 0xff
+PASS: todas las pruebas de loopback UART
+
+$ vvp sistema_top.vvp
+PASS: sistema_top CPU+RAM+MMIO+INPUT+LED+VGA
+
+$ python3 -m unittest discover -s tests -p "test_*.py"
+Ran 59 tests in 0.002s
+OK
+```
+
+**Figura 12.1.** Captura de consola de varios testbenches. Se observa que cada banco termina con un mensaje PASS y que el cuadro VGA completo se simula en 420 000 ciclos de píxel.
+
+Cierre de `game_firmware_tb` (66,06 ms simulados, ≈ 6,6 millones de ciclos de `clk_i`):
+
+```text
+PASS 23: victoria J1 -> DR,7,4,H + FIN,1 + STATE_FINISHED + WINS_J1
+PASS 24: BTN_RST reinicia partida y conserva WINS_J1=1
+PASS 25: victoria J2 -> SR,7,4,H + FIN,2 + STATE_FINISHED + WINS_J2
+...
+PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=0301
+FATAL: tb/game_firmware_tb.sv:3078: FAIL: game firmware con 42 errores
+```
+
+**Figura 12.2.** Cierre de la simulación del firmware completo. Las 42 comprobaciones fallidas son únicamente de tipo `ERROR VGA[n]: esperado=… obtenido=…` (índices de tile), nunca de UART, RAM, turno, estado ni display.
+
+<!-- PENDIENTE: ejecutar los testbenches con xsim de Vivado (con la IP clk_wiz_pixel real) y adjuntar la captura de consola de Vivado -->
 
 #### Formas de onda relevantes
 
-<!-- Sugerencia: reset y primera instrucción, accesos a RAM y periféricos, salto
-condicional, escritura de un tile, sincronismos, trama UART y validación de un disparo. -->
+<!-- PENDIENTE: capturas de formas de onda (xsim/GTKWave) de: (a) reset y primera instrucción del procesador; (b) accesos a RAM y a periféricos; (c) un salto condicional; (d) la escritura de un tile (we_vga, vga_addr, vga_wdata); (e) hsync y vsync con sus anchos de 96 ciclos y 2 líneas; (f) una trama UART de 10 bits a 115 200 baudios (p. ej. `S,0,0\n`); (g) la validación de un disparo (SR/DR). Los testbenches existentes generan los estímulos, solo falta guardar las formas de onda con $dumpvars. -->
 
 #### Simulación post-implementación temporizada
 
-<!-- Sugerencia: fragmento representativo del programa y validación de un disparo. -->
+<!-- PENDIENTE: generar desde Vivado la netlist post-implementación con retardos (SDF) y simular un fragmento del programa y la validación de un disparo (p. ej. el disparo S,0,0 con impacto). Adjuntar captura y comentar los retardos observados. -->
 
 #### Tabla de casos de prueba
 
-<!-- Sugerencia: tabla (Caso | Estímulo | Resultado esperado | Resultado obtenido) con
-colocaciones válidas e inválidas, impacto, fallo, disparo repetido, hundido, victoria,
-BTN_RST y byte UART inválido. -->
+**Tabla 12.2.** Casos de prueba ejecutados por `game_firmware_tb` sobre el sistema completo.
+
+| Caso | Estímulo | Resultado esperado | Resultado obtenido |
+|---|---|---|---|
+| Inicialización (1) | Reset del sistema | `GAME_STATE=0`, `TURN=1`, tableros en cero | PASS (lógico); tiles VGA ver 13.6 |
+| Colocación válida J1 (2, 4, 6) | OK con barcos 0 (H), 1 (V) y 2 (H) | Barcos en `BOARD_J1` | PASS |
+| Colocación fuera de tablero J1 (3) | OK con el barco en el borde | Rechazo, buzzer `0x0B`, estado sin cambio | PASS |
+| Traslape J1 (5) | OK sobre un barco existente | Rechazo | PASS |
+| Cuarto barco J1 (7) | OK con flota completa | Ignorado | PASS |
+| Recepción UART (8) | Byte 0x50 (`P`) | Byte en `UART_LAST_BYTE` y limpieza de `RX_VALID` | PASS |
+| Parser P (9, 10) | `P,0,0,0,H`, `P,2,6,4,V` | Campos y `FRAME_READY` | PASS |
+| Byte/trama inválida (11) | Trama malformada | Descartada, parser en estado 0 | PASS |
+| Traslape o barco duplicado J2 (12) | Colocación repetida | `PR,barco,O` | PASS |
+| Fuera de tablero J2 (13) | `P` que excede el borde | `PR,1,F` | PASS |
+| Inicio de batalla (14) | Flotas completas | `PA`, `B`, `T,1`, `GAME_STATE=1` | PASS |
+| Impacto J1 / J2 (15, 16) | Disparo a (0,0) | `HIT`, turno cambia, `DR`/`SR` con `I` | PASS (lógico) |
+| Fallo J1 / J2 (17, 18) | Disparo a (0,4) | `MISS`, turno cambia, `F` | PASS (lógico) |
+| Disparo repetido (19, 20) | Mismo disparo otra vez | Ignorado, turno sin cambio | PASS |
+| Hundido (21, 22) | Último segmento del barco 0 | `DR,0,3,H` / `SR,0,3,H` | PASS |
+| Victoria J1 / J2 (23, 25) | Hundir la flota rival | `FIN,1` / `FIN,2`, `STATE_FINISHED`, victorias | PASS |
+| BTN_RST (24) | RST tras una victoria | Partida reiniciada; `WINS_J1` conservado | PASS |
+| J2 termina primero (26) | J2 completa antes que J1 | Al terminar J1: `B`, `T,1`, batalla | PASS |
+| Estado finalizado (27) | Botones y disparos tras fin | Ignorados excepto BTN_RST | PASS |
+| Fuera de turno (28) | `S` durante turno del J1 | Ignorado | PASS |
+| Marcador (29) | J1=2, J2=1 | `DISPLAY = 0x0201` | PASS |
+| Partida completa (30) | J1 vs J2 hasta la victoria | `FIN,1`, `WINS_J1=3`, `DISPLAY=0x0301` | PASS |
 
 ### 12.2 Resultados físicos y funcionales
 
+Esta sección requiere evidencia de la prueba en la tarjeta, que no puede obtenerse de simulación. Los resultados siguientes quedan pendientes de completar por el equipo.
+
 #### Fase de colocación
 
-<!-- Sugerencia: captura o foto de la pantalla VGA durante la colocación. -->
+<!-- PENDIENTE: Figura 12.3 — foto o captura de la pantalla VGA durante la colocación (título, tablero del J1 con cursor amarillo y barcos grises, LED 001). -->
 
 #### Fase de batalla
 
-<!-- Sugerencia: captura o foto de ambos tableros y del HUD. -->
+<!-- PENDIENTE: Figura 12.4 — foto de ambos tableros con impactos (rojo) y fallos (blanco), HUD con aciertos/fallos y cursor sobre el tablero del J2; LED 010. -->
 
 #### Fin de la partida
 
-<!-- Sugerencia: pantalla de resultado con el jugador ganador. -->
+<!-- PENDIENTE: Figura 12.5 — pantalla al finalizar con el LED 100 y el marcador en los displays. -->
 
 #### Aplicación de PC del Jugador 2
 
-<!-- Sugerencia: captura de la aplicación con el tablero propio y el estado del rival. -->
+<!-- PENDIENTE: Figura 12.6 — captura de la aplicación con «Mi tablero», «Tablero rival» y el panel de estado en pleno juego. -->
 
 #### Información oculta
 
-<!-- Sugerencia: evidencia de que cada jugador solo ve impactos y fallos del rival. -->
+<!-- PENDIENTE: Figura 12.7 — capturas simultáneas de VGA y PC en la misma partida que muestren que el J1 no ve los barcos del J2 en el VGA y que el J2 no recibe la flota del J1. Complementar con un registro (log) de las tramas UART transmitidas por la FPGA durante la partida. -->
 
 #### Indicadores locales
 
-<!-- Sugerencia: displays, LED por fase y los cinco sonidos del buzzer. -->
+<!-- PENDIENTE: Figura 12.8 — foto de los displays con el marcador y de los tres LED por fase; registro de audio o video de los cinco sonidos del buzzer (impacto, fallo, hundido, inválido y victoria). -->
 
 #### Fotografía del sistema completo
 
-<!-- Sugerencia: OBLIGATORIA. Foto del montaje con la tarjeta, el monitor VGA y la PC. -->
+<!-- PENDIENTE (OBLIGATORIA): Figura 12.9 — foto del montaje con la Nexys 4, el monitor VGA y la PC con la aplicación. -->
 
 ### 12.3 Síntesis, implementación y utilización de recursos
 
 #### Utilización de recursos
 
-<!-- Sugerencia: tabla (Recurso | Utilizado | Disponible | % Utilización) con LUT, FF,
-slices, BRAM, DSP, IO y PLL/MMCM, copiada del reporte de Vivado. -->
+<!-- PENDIENTE: Tabla 12.3 — copiar de Vivado (report_utilization, post-implementación) LUT, FF, slices, BRAM, DSP, IO y PLL/MMCM, con disponibles y porcentajes para la XC7A100T-1CSG324C. Referencia para la comparación: la memoria de tiles son 300×32 bits y la ROM 2048×32 bits; la RAM 1024×32 bits. -->
 
 #### Análisis de timing
 
-<!-- Sugerencia: WNS, TNS y hold slack copiados del reporte, confirmando si se cumple el
-timing para el reloj de 100 MHz y el de píxel, con captura del reporte. -->
+<!-- PENDIENTE: Tabla 12.4 — WNS, TNS y hold slack (WHS, THS) de report_timing_summary, para el reloj de 100 MHz (`sys_clk_pin`) y para el reloj generado de 25 MHz, indicando si se cumple el timing y adjuntando la captura. Indicar también que el archivo de restricciones declara multicycle path (setup 4, hold 3) para las rutas PC/banco de registros y hacia RAM/periféricos. -->
 
 #### Evidencia de síntesis e implementación
 
-<!-- Sugerencia: RTL elaborado, vista del dispositivo, ausencia de latches y de errores
-críticos, y modelo exacto de la FPGA. -->
+<!-- PENDIENTE: capturas del RTL elaborado, de la vista del dispositivo, de la ausencia de latches y de errores críticos (Critical Warnings), y modelo de la FPGA (XC7A100T-1CSG324C de la Nexys 4 Rev. B, según la documentación de la tarjeta). -->
 
 ---
 
 ## 13. Análisis e interpretación de resultados
 
-<!-- Sugerencia general: peso 25% de la rúbrica. Comparar valores teóricos, simulados y
-experimentales e identificar causas de diferencias o errores. Referenciar los datos de
-la sección 12 por número de figura o tabla sin repetirlos. -->
 
 ### 13.1 Análisis del procesador
 
-<!-- Sugerencia: comportamiento observado, camino crítico y frecuencia máxima frente a la
-real. -->
+Los análisis de esta sección se basan en la evidencia de simulación de la Sección 12.1 y en los cálculos teóricos derivados del código; los apartados que dependen de mediciones en la tarjeta quedan indicados como pendientes.
+
+Las simulaciones del núcleo (Tabla 12.1) coinciden con el comportamiento esperado: las 27 instrucciones originales producen exactamente las 25 escrituras previstas en 71 ciclos y los casos límite (inmediatos, desplazamientos, escritura en `x0`, LUI/AUIPC) pasan sin fallos. Con `ce_i = 1` el núcleo confirma una instrucción por ciclo; en el sistema final, con `cpu_ce` cada 4 ciclos, la tasa máxima es de 25 MIPS (100 MHz / 4). El programa de juego completo se ejecutó en 6,6 millones de ciclos de reloj simulados (≈ 1,65 millones de instrucciones) para una partida de ocho disparos por jugador y colocaciones, lo que equivale a 66 ms con el reloj de 100 MHz: la lógica del juego es órdenes de magnitud más rápida que la interacción humana.
+
+El camino crítico del procesador de ciclo único (PC → ROM → decodificación → banco de registros → ALU → RAM/MMIO → registro destino) no se puede estimar a partir de las simulaciones funcionales. La decisión de utilizar `cpu_ce` y *multicycle paths* se justifica porque esa ruta, que incluye la lectura combinacional de ROM y RAM y el multiplexor de lectura de periféricos, probablemente excede 10 ns, mientras que con 4 ciclos dispone de 40 ns.
+
+<!-- PENDIENTE: comparar la frecuencia máxima teórica con el reporte de timing (WNS) de la sección 12.3 y con la operación real a 100 MHz. -->
 
 ### 13.2 Análisis del periférico VGA
 
-<!-- Sugerencia: estabilidad de la imagen, refresco teórico frente a observado y efecto del
-cruce de dominios de reloj. -->
+La simulación de `vga_timing` confirma que un cuadro completo requiere exactamente 420 000 ciclos de píxel (800 × 525), es decir, 16,8 ms a 25 MHz, que corresponde a una frecuencia de refresco de 59,52 Hz, ligeramente inferior a los 59,94 Hz del estándar (reloj de 25 MHz frente a 25,175 MHz); la diferencia (0,7 %) es tolerada por los monitores comunes. La memoria de video resuelve el cruce de dominios sin sincronizadores de datos porque cada puerto es síncrono con su propio reloj y el CPU nunca lee los tiles; el único riesgo es que una escritura coincida con la lectura de la misma casilla, lo que produciría como máximo un píxel de tile con el valor antiguo o nuevo durante un cuadro, sin consecuencias visibles. El retardo de lectura de un ciclo se compensa mediante registros de retardo que alinean la posición del píxel con el dato leído; esta alineación se verifica con `vga_color_rgb_tb` y debe observarse en pantalla como ausencia de desplazamiento entre la cuadrícula y los colores.
+
+El uso de tiles de 32×32 reduce la memoria de video a 9 600 bits frente a 3,69 Mbit de un framebuffer (unas 380 veces menos), y permite que el firmware dibuje todo el HUD con 300 escrituras en `init_game`. El texto utiliza una fuente 8×8 escalada 4×, suficiente para el título y los contadores.
+
+<!-- PENDIENTE: contrastar estabilidad de la imagen, ausencia de parpadeo y refresco observado en el monitor (la mayoría de los monitores informan la frecuencia que detectan) y comentar cualquier efecto del cruce de dominios en la tarjeta. -->
 
 ### 13.3 Análisis de la comunicación UART y la aplicación de PC
 
-<!-- Sugerencia: protocolo especificado frente a tramas observadas, confiabilidad y
-pérdidas. -->
+El receptor y el transmisor se verificaron individualmente y en bucle (`uart_loopback_tb`) para cinco bytes representativos, y `game_firmware_tb` valida el protocolo extremo a extremo: las tramas `P`, `S` y las respuestas `PA`, `PR`, `B`, `T`, `SR`, `DR` y `FIN` coinciden byte a byte con las especificadas. El divisor de 868 ciclos genera una velocidad de 115 207 baudios, con un error de 0,006 % respecto de 115 200, muy inferior al margen de ±3 % que tolera un receptor con muestreo a mitad de bit.
+
+Una trama de 10 bits dura 86,8 µs, por lo que el firmware (que atiende la UART en cada vuelta del lazo principal) debe consultar `RX_VALID` en menos de ese tiempo para no perder bytes, ya que el periférico retiene solo un byte; a 25 MIPS esto equivale a unas 2 100 instrucciones, muy por encima de la longitud de una vuelta de `main_loop` (decenas de instrucciones). La principal debilidad es la transmisión: `uart_putc` espera activamente a que `TX_BUSY` baje, de modo que el envío de una respuesta de 9 bytes (≈ 0,8 ms) bloquea el lazo; durante ese tiempo podría llegar un byte del PC. El protocolo evita esa situación porque el J2 envía una única trama y espera la respuesta antes de la siguiente (la aplicación impide una segunda colocación mientras hay una pendiente). El enlace no tiene control de flujo ni sumas de verificación; los errores se detectan por validación sintáctica y descarte de la trama.
+
+<!-- PENDIENTE: confirmar con la prueba física la ausencia de pérdidas y cualquier problema de puerto serie (drivers, nombre del puerto). -->
 
 ### 13.4 Análisis del programa en ensamblador
 
-<!-- Sugerencia: tamaño del programa frente a la ROM, uso de RAM y coordinación de turnos y
-de la colocación concurrente. -->
+El programa ocupa 1109 palabras (4436 bytes) de las 2048 (8192 bytes) de la ROM, es decir, el 54,1 %. La RAM utilizada llega hasta `0x2524` (1316 bytes, 32 % de los 4096 disponibles): el 96 % corresponde a los cuatro tableros de 64 palabras (1024 bytes) más las variables. Se almacenó una palabra de 32 bits por casilla en lugar de empaquetar bits, lo que simplifica el código (un `lw`/`sw` por casilla) a cambio de memoria que sobra.
+
+La coordinación se resuelve con un único lazo de sondeo: en cada vuelta se atiende la UART y los botones, lo que permite que la colocación sea concurrente sin interrupciones. Los turnos se garantizan comprobando `TURN` y `GAME_STATE` antes de procesar cualquier acción (los botones solo actúan con `TURN = 1` y las tramas `S` solo con `TURN = 2`), y las pruebas 27 y 28 de `game_firmware_tb` verifican que las acciones fuera de turno o de estado no alteran el estado. Para detectar un barco hundido o una victoria se recorren 64 casillas (hasta 64 iteraciones por comprobación), costo despreciable frente al tiempo de una pulsación.
 
 ### 13.5 Análisis de síntesis, timing y recursos
 
-<!-- Sugerencia: margen de timing, módulos que más consumen y escalabilidad. -->
+<!-- PENDIENTE: a partir de los reportes de la sección 12.3, analizar el margen de timing (WNS/WHS) del reloj de 100 MHz y del de 25 MHz, los módulos que más consumen (se espera que la RAM y la memoria de tiles se mapeen a BRAM o a LUTRAM distribuida, el banco de registros a LUTRAM y `vga_font` a LUT) y la escalabilidad (por ejemplo, un tablero mayor aumentaría la memoria de tiles y el costo de los recorridos de hundimiento). -->
 
 ### 13.6 Problemas y soluciones
 
-<!-- Sugerencia: tabla (Problema | Causa probable | Diagnóstico | Solución aplicada o
-recomendada). -->
+**Tabla 13.1.** Problemas encontrados en la revisión y su tratamiento.
+
+| Problema | Causa probable | Diagnóstico | Solución aplicada o recomendada |
+|---|---|---|---|
+| Los testbenches del procesador (`tb_stage3`, `tb_riscv_core`, `tb_core_edges`, `tb_processor_subsystem`) no compilan | Se agregó `ce_i` al núcleo (`fix/cpu-timing-enable`) sin actualizar los bancos | Error `Wildcard named port connection … ce_i` | Recomendado: declarar `logic ce_i = 1` en los tb. Con esa adaptación los cuatro pasan (Tabla 12.1) |
+| `game_firmware_tb` reporta 42 `ERROR VGA` aunque las 30 etapas lógicas pasan | El tb usa `VGA_BOARD_OFFSET = 61` (tableros desde la fila 3) y espera ceros en el HUD, pero el firmware con HUD usa 121 (fila 6) y escribe texto en las filas 0, 2 y 4 | Los índices con error coinciden con los tiles del HUD (80–92) y con las posiciones antiguas (61, 71, 75…) | Recomendado: actualizar `VGA_BOARD_OFFSET` a 121, los tiles del tablero rival a +10 y excluir las filas del HUD de la verificación de «inicio vacío» |
+| `sistema_top.sv` no compila en Icarus (`reg input_rdata cannot be driven`) | Una señal `logic` conducida por la salida de una instancia | Mensaje del compilador | Solo afecta a Icarus (Vivado lo acepta); para simular se usó una copia con `wire` |
+| La IP `clk_wiz_pixel` no se puede simular con Icarus | La IP de Vivado no es un modelo SystemVerilog del repositorio | Módulo indefinido | Para la simulación en Icarus se usó un modelo de comportamiento; la simulación del sistema debe repetirse con xsim |
+| `sistema_top_tb` declara `anode_o` de 4 bits | El top pasó de 4 a 8 ánodos | Advertencia de relleno de puerto | Recomendado: declarar `anode_o` de 8 bits |
+| Advertencia `unique case` en `seg7_ctrl` | Los códigos BCD 10–15 no están cubiertos | Advertencia al inicio de cada simulación | Inofensiva en uso normal (el firmware solo escribe 0–9); recomendado agregar `default` |
+| Solo hay cinco pulsadores libres para siete controles | La Nexys 4 tiene 5 pulsadores y el sexto es CPU RESET | Revisión del manual y del archivo `.xdc` | SEL en SW0 y RST del juego en SW1 |
+| Ruta del camino crítico del procesador de ciclo único | Lectura combinacional de ROM/RAM, ALU y multiplexor MMIO en un ciclo | Análisis de diseño | `cpu_ce` cada 4 ciclos y *multicycle path* en el XDC |
+| Lectura de un registro con efecto secundario (entradas) | `mmio_sel` depende solo de la dirección, no de la lectura | Nota de diseño de la Sección 7.7 | `input_ack_i = sel_input && cpu_ce && !mmio_we` |
+
+<!-- PENDIENTE: agregar los problemas observados durante la síntesis, la implementación y las pruebas en la tarjeta (timing, parpadeo VGA, ruido del buzzer, rebotes, etc.) -->
 
 ---
 
 ## 14. Conclusiones
 
-<!-- Sugerencia: peso 15% de la rúbrica. Conclusiones numeradas, fundamentadas y
-conectadas con los objetivos (sección 2) y los resultados (secciones 12 y 13). Incluir
-lecciones aprendidas sobre la relación entre hardware y software, limitaciones y
-mejoras futuras. -->
+1. Se diseñó e integró un sistema completo —procesador rv32i de 29 instrucciones, memorias de programa y datos con buses independientes, interconexión MMIO y seis periféricos— cuya jerarquía final se describe en la Sección 6.1 y cuyos módulos se verificaron con 23 testbenches autoverificables, de los cuales 22 terminan en PASS y uno (`game_firmware_tb`) falla únicamente en comprobaciones de tiles VGA desactualizadas (Objetivos 1, 2 y 9).
+2. El programa en ensamblador implementa por completo las reglas del juego —colocación concurrente, turnos, validación, hundimiento, victoria y reinicio— en 1109 instrucciones (54 % de la ROM) y utiliza solo 32 % de la RAM. La simulación de una partida completa sobre el sistema verifica 30 etapas lógicas, incluyendo la partida de extremo a extremo (Objetivo 6; Secciones 12.1 y 13.4).
+3. El periférico VGA basado en tiles reduce la memoria de video unas 380 veces frente a un framebuffer y permite actualizar una casilla con una sola escritura; la temporización de 800×525 a 25 MHz produce 59,52 Hz (Objetivo 3; Sección 13.2). Su validación visual y de timing en la tarjeta queda pendiente de la evidencia de la Sección 12.
+4. Al reutilizar el UART del Proyecto 2 y definir un protocolo de líneas ASCII, la aplicación de PC pudo desarrollarse y probarse de forma independiente (59 pruebas unitarias) y sin lógica de juego propia, lo que respalda el ocultamiento de información: la flota de cada jugador solo existe en la RAM del procesador y solo salen de ella los resultados de disparo (Objetivos 5, 7 y 8; Sección 9.8).
+5. La relación entre hardware y software condicionó el diseño: la ausencia de interrupciones llevó a un lazo de sondeo, la ausencia de pila a registros de retorno alternativos (`t5`, `t6`), la limitación de pulsadores a la asignación de dos interruptores y el camino crítico del ciclo único a la habilitación `cpu_ce` con *multicycle paths*. Cada decisión se documentó como parte del diseño (Sección 1.3).
+6. La verificación detectó que algunos bancos de prueba quedaron desactualizados respecto del RTL y del firmware (puerto `ce_i`, desplazamiento VGA del HUD, ancho de `anode_o`). Es una lección de mantener los testbenches sincronizados con cada cambio, por ejemplo ejecutándolos de forma automática en cada integración (Sección 13.6).
+7. Limitaciones y trabajo futuro: completar la evidencia de síntesis, timing (WNS/TNS/hold), utilización de recursos, simulación post-implementación y pruebas físicas; actualizar los testbenches desactualizados; añadir control de flujo o verificación de errores al protocolo UART; y evaluar un buzzer pasivo para generar tonos o melodías.
+
+<!-- PENDIENTE: reescribir las conclusiones 3 y 7 con los resultados físicos y de timing reales una vez se tengan. -->
 
 ---
 
 ## Anexos (opcional)
 
-<!-- Sugerencia: código ensamblador completo, tabla completa de pines y cualquier material
-de soporte que no encaje en el cuerpo del informe. -->
 
 ## Referencias
 
-<!-- Sugerencia: documentación de RISC-V, manual de la tarjeta, estándar VGA y demás
-fuentes usadas. -->
+1. A. Waterman y K. Asanović (eds.), *The RISC-V Instruction Set Manual, Volume I: User-Level ISA*, RISC-V International.
+2. D. Patterson y J. Hennessy, *Computer Organization and Design: RISC-V Edition*, Morgan Kaufmann.
+3. Digilent, *Nexys 4 FPGA Board Reference Manual* (Nexys 4 Rev. B).
+4. Digilent, *Nexys 4 Master XDC* (archivo de restricciones de referencia).
+5. AMD/Xilinx, *Clocking Wizard LogiCORE IP Product Guide (PG065)* y *7 Series FPGAs Clocking Resources User Guide (UG472)*.
+6. VESA, *Monitor Timing Standard* (temporización 640×480@60 Hz); y J. Tinsley, *TinyVGA — VGA signal 640 x 480 @ 60 Hz industry standard timing*.
+7. S. Palnitkar, *Verilog HDL: A Guide to Digital Design and Synthesis*, Prentice Hall.
+8. Icarus Verilog 12.0, documentación en http://iverilog.icarus.com.
+9. pySerial, documentación en https://pyserial.readthedocs.io.
+10. Documento de planteamiento del diseño del Proyecto 3 (`docs/diseño/planteamiento.md`) y enunciado del Proyecto 3, EL3313 Taller de Diseño Digital.
+
+<!-- PENDIENTE: verificar las versiones y ediciones exactas de las referencias antes de entregar -->
