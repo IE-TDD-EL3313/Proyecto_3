@@ -14,6 +14,10 @@ module vga_periferico (
     input  logic [8:0]  vga_addr_i,
     input  logic [31:0] vga_wdata_i,
 
+    // Control visual del cursor:
+    // [7] visible, [6] tablero, [5:3] fila, [2:0] columna
+    input  logic [7:0]  cursor_ctrl_i,
+
     // Salida física hacia el monitor
     output logic        hsync_o,
     output logic        vsync_o,
@@ -31,15 +35,28 @@ module vga_periferico (
     logic        video_on;
     logic [31:0] tile_data;
     logic        video_on_d;
+    logic [4:0]  pixel_x_d;
+    logic [4:0]  pixel_y_d;
+    logic [4:0]  tile_col_d;
+    logic [3:0]  tile_row_d;
 
     assign rst_pix = rst_i | ~pll_locked;
 
     // Compensación de la latencia de lectura de la memoria de video
     always_ff @(posedge clk_pix) begin
-        if (rst_pix)
+        if (rst_pix) begin
             video_on_d <= 1'b0;
-        else
+            pixel_x_d  <= 5'b0;
+            pixel_y_d  <= 5'b0;
+            tile_col_d <= 5'b0;
+            tile_row_d <= 4'b0;
+        end else begin
             video_on_d <= video_on;
+            pixel_x_d  <= hcount[4:0];
+            pixel_y_d  <= vcount[4:0];
+            tile_col_d <= hcount[9:5];
+            tile_row_d <= vcount[8:5];
+        end
     end
 
     // --- Generador de reloj de píxel ---
@@ -78,6 +95,11 @@ module vga_periferico (
     vga_color_rgb u_color (
         .tile_data_i(tile_data),
         .video_on_i (video_on_d),
+        .pixel_x_i  (pixel_x_d),
+        .pixel_y_i  (pixel_y_d),
+        .tile_col_i (tile_col_d),
+        .tile_row_i (tile_row_d),
+        .cursor_ctrl_i(cursor_ctrl_i),
         .r_o        (r_o),
         .g_o        (g_o),
         .b_o        (b_o)

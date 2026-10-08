@@ -17,7 +17,6 @@ module game_firmware_tb;
     wire [3:0] r_o;
     wire [3:0] g_o;
     wire [3:0] b_o;
-    wire [31:0] pc_o;
 
     integer cycles;
     integer i;
@@ -60,8 +59,7 @@ module game_firmware_tb;
         .vsync_o    (vsync_o),
         .r_o        (r_o),
         .g_o        (g_o),
-        .b_o        (b_o),
-        .pc_o       (pc_o)
+        .b_o        (b_o)
     );
 
     // ------------------------------------------------------------
@@ -98,14 +96,16 @@ module game_firmware_tb;
             if (timeout >= 500)
                 $fatal(1,
                     "Timeout esperando captura INPUT: PC=%h addr=%h",
-                    pc_o, dut.mmio_addr);
+                    dut.pc_internal, dut.mmio_addr);
 
-            // El register_file captura el resultado del lw
-            // en el siguiente flanco positivo.
-            @(posedge clk_i);
+            // El register_file solo captura el resultado del lw
+            // en un flanco positivo con cpu_ce activo.
+            do begin
+                @(posedge clk_i);
+            end while (dut.cpu_ce !== 1'b1);
             #1;
 
-            // Retirar inmediatamente el boton.
+            // Retirar el boton una vez realizado el commit del lw.
             injected_button = 32'h0;
 
             // Primero esperar que el CPU abandone este acceso INPUT.
@@ -132,7 +132,7 @@ module game_firmware_tb;
             if (timeout >= 150000)
                 $fatal(1,
                     "Timeout esperando retorno a main_loop: PC=%h addr=%h",
-                    pc_o, dut.mmio_addr);
+                    dut.pc_internal, dut.mmio_addr);
 
             // En esta nueva lectura INPUT debe verse cero.
             if (dut.mmio_rdata !== 32'h0000_0000)
@@ -509,6 +509,8 @@ module game_firmware_tb;
         end
     endtask
 
+    localparam integer VGA_BOARD_OFFSET = 61; // 3 filas * 20 tiles
+
     task automatic expect_vga(
         input integer index,
         input [31:0] expected
@@ -537,13 +539,13 @@ module game_firmware_tb;
         repeat (3) @(negedge clk_i);
         rst_ni = 1'b1;
 
-        while ((led_o !== 3'b001) && (cycles < 3000)) begin
+        while ((led_o !== 3'b001) && (cycles < 15000)) begin
             @(negedge clk_i);
             cycles = cycles + 1;
         end
 
         if (led_o !== 3'b001)
-            $fatal(1, "Timeout init_game PC=%h", pc_o);
+            $fatal(1, "Timeout init_game PC=%h", dut.pc_internal);
 
         repeat (10) @(negedge clk_i);
 
@@ -579,10 +581,10 @@ module game_firmware_tb;
         expect_ram(66, 32'd1); // (0,2)
         expect_ram(67, 32'd1); // (0,3)
 
-        expect_vga(0, 32'd1);
-        expect_vga(1, 32'd1);
-        expect_vga(2, 32'd1);
-        expect_vga(3, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 1, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 2, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 3, 32'd1);
 
         expect_ram(5, 32'd1); // CURRENT_SHIP
         expect_ram(6, 32'd1); // PLACED_J1
@@ -637,9 +639,9 @@ module game_firmware_tb;
         expect_ram(86, 32'd2);
 
         // VGA: fila*20 + columna.
-        expect_vga(6, 32'd1);
-        expect_vga(26, 32'd1);
-        expect_vga(46, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 6, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 26, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 46, 32'd1);
 
         expect_ram(5, 32'd2);
         expect_ram(6, 32'd2);
@@ -680,8 +682,8 @@ module game_firmware_tb;
         expect_ram(72, 32'd3);
         expect_ram(73, 32'd3);
 
-        expect_vga(20, 32'd1);
-        expect_vga(21, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 20, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 21, 32'd1);
 
         expect_ram(5, 32'd3);
         expect_ram(6, 32'd3);
@@ -721,10 +723,10 @@ module game_firmware_tb;
         expect_ram(74, 32'd0);
 
         // Comprobar tambien posiciones representativas en VGA.
-        expect_vga(0,  32'd1);
-        expect_vga(6,  32'd1);
-        expect_vga(20, 32'd1);
-        expect_vga(22, 32'd0);
+        expect_vga(VGA_BOARD_OFFSET + 0,  32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 6,  32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 20, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 22, 32'd0);
 
         $display("PASS 7: cuarto barco ignorado");
 
@@ -1359,7 +1361,7 @@ module game_firmware_tb;
         // fila 0, columna visual 10
         // tile = 0*20 + 10 = 10
         // Debe mostrar CELL_HIT.
-        expect_vga(10, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 10, 32'd2);
 
         // Un disparo valido entrega el turno al Jugador 2.
         expect_ram(1, 32'd2);
@@ -1446,7 +1448,7 @@ module game_firmware_tb;
 
         // VGA del tablero J1:
         // fila 0, columna 0 -> tile 0.
-        expect_vga(0, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd2);
 
         // Un disparo valido devuelve el turno a J1.
         expect_ram(1, 32'd1);
@@ -1548,7 +1550,7 @@ module game_firmware_tb;
         // VGA enemigo:
         // fila 0, columna visual 10 + 4 = 14.
         // tile = 14.
-        expect_vga(14, 32'd3);
+        expect_vga(VGA_BOARD_OFFSET + 14, 32'd3);
 
         // Un disparo valido devuelve el turno al Jugador 2.
         expect_ram(1, 32'd2);
@@ -1635,7 +1637,7 @@ module game_firmware_tb;
 
         // VGA del tablero J1:
         // fila 0, columna visual 10 + 4 = 14.
-        expect_vga(14, 32'd3);
+        expect_vga(VGA_BOARD_OFFSET + 14, 32'd3);
 
         // Un disparo valido devuelve el turno a J1.
         expect_ram(1, 32'd1);
@@ -1658,7 +1660,7 @@ module game_firmware_tb;
 
         // La casilla (0,0) ya fue disparada por J1.
         expect_ram(192, 32'd2);  // SHOTS_J1[0] = CELL_HIT
-        expect_vga(10, 32'd2);   // VGA enemigo: tile 10 = CELL_HIT
+        expect_vga(VGA_BOARD_OFFSET + 10, 32'd2);   // VGA enemigo: tile 10 = CELL_HIT
 
         // Intentar disparar nuevamente en (0,0).
         press_button(6'b100000); // BTN_OK
@@ -1669,7 +1671,7 @@ module game_firmware_tb;
         expect_ram(192, 32'd2);  // SHOTS_J1[0] permanece HIT
 
         // La VGA debe permanecer sin cambios.
-        expect_vga(10, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 10, 32'd2);
 
         // El turno debe permanecer en J1.
         expect_ram(1, 32'd1);
@@ -1756,7 +1758,7 @@ module game_firmware_tb;
 
         // Tile enemigo:
         // fila 0, columna visual 10 + 7 = 17.
-        expect_vga(17, 32'd3);
+        expect_vga(VGA_BOARD_OFFSET + 17, 32'd3);
 
         // El turno pasa a J2.
         expect_ram(1, 32'd2);
@@ -1770,7 +1772,7 @@ module game_firmware_tb;
 
         // El disparo anterior de J2 permanece como HIT.
         expect_ram(256, 32'd2);
-        expect_vga(0, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd2);
 
         fork
             begin
@@ -1787,7 +1789,7 @@ module game_firmware_tb;
 
         // El disparo repetido no debe modificar la casilla.
         expect_ram(256, 32'd2);
-        expect_vga(0, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd2);
 
         // El turno tampoco debe cambiar.
         expect_ram(1, 32'd2);
@@ -1899,7 +1901,7 @@ module game_firmware_tb;
         expect_ram(195, 32'd2);
 
         // VGA enemigo: columna visual = 10 + 3 = 13.
-        expect_vga(13, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 13, 32'd2);
 
         // El disparo valido entrega el turno a J2.
         expect_ram(1, 32'd2);
@@ -2008,7 +2010,7 @@ module game_firmware_tb;
         expect_ram(259, 32'd2);
 
         // VGA de J1: fila 0, columna 3 -> tile 3.
-        expect_vga(3, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 3, 32'd2);
 
         // Tras el disparo valido vuelve el turno a J1.
         expect_ram(1, 32'd1);
@@ -2164,7 +2166,7 @@ module game_firmware_tb;
 
         // VGA de (7,4) en tablero enemigo:
         // tile = 7*20 + (10+4) = 154.
-        expect_vga(154, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 154, 32'd2);
 
         $display("PASS 23: victoria J1 -> DR,7,4,H + FIN,1 + STATE_FINISHED + WINS_J1");
 
@@ -2418,7 +2420,7 @@ module game_firmware_tb;
 
         // VGA de J1:
         // fila 7, columna 4 -> tile = 7*20 + 4 = 144.
-        expect_vga(144, 32'd2);
+        expect_vga(VGA_BOARD_OFFSET + 144, 32'd2);
 
         $display("PASS 25: victoria J2 -> SR,7,4,H + FIN,2 + STATE_FINISHED + WINS_J2");
 
@@ -2813,7 +2815,7 @@ module game_firmware_tb;
         dut.u_processor.ram.words[256] = 32'd0;
 
         // VGA propio (0,0): barco.
-        dut.u_vga.u_memory.mem[0] = 32'd1;
+        dut.u_vga.u_memory.mem[VGA_BOARD_OFFSET + 0] = 32'd1;
 
         repeat (50) @(negedge clk_i);
 
@@ -2839,7 +2841,7 @@ module game_firmware_tb;
         expect_ram(64, 32'd1);
 
         // VGA tampoco debe mostrar impacto.
-        expect_vga(0, 32'd1);
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd1);
 
         // Marcadores intactos.
         expect_ram(8, 32'd2);
@@ -2878,15 +2880,15 @@ module game_firmware_tb;
         expect_ram(8, 32'd2);
         expect_ram(9, 32'd1);
 
-        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0021) begin
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_F2F1) begin
             $display(
-                "ERROR PASS29: DISPLAY esperado=00000021 obtenido=%h",
+                "ERROR PASS29: DISPLAY esperado=0000F2F1 obtenido=%h",
                 dut.u_locales.u_seg7_ctrl.rdata_o
             );
             errors = errors + 1;
         end
 
-        $display("PASS 29: display MMIO muestra marcador J1=2 J2=1 -> 0021");
+        $display("PASS 29: display MMIO muestra marcador J1=2 J2=1 -> F2F1");
 
         // ============================================================
         // 30. PARTIDA COMPLETA END-TO-END
@@ -3033,9 +3035,9 @@ module game_firmware_tb;
         expect_ram(8, 32'd3); // WINS_J1: 2 -> 3
         expect_ram(9, 32'd1); // WINS_J2 permanece 1
 
-        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0031) begin
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_F3F1) begin
             $display(
-                "ERROR PASS30 DISPLAY: esperado=00000031 obtenido=%h",
+                "ERROR PASS30 DISPLAY: esperado=0000F3F1 obtenido=%h",
                 dut.u_locales.u_seg7_ctrl.rdata_o
             );
             errors = errors + 1;
@@ -3055,7 +3057,7 @@ module game_firmware_tb;
         expect_ram(244, 32'd2); // (6,4)
         expect_ram(252, 32'd2); // (7,4)
 
-        $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=0031");
+        $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=F3F1");
 
         if (errors != 0)
             $fatal(1,

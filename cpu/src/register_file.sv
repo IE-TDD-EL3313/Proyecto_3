@@ -3,6 +3,7 @@
 module register_file (
     input  logic        clk_i,
     input  logic        rst_i,
+    input  logic        ce_i,
     input  logic        RegWrite,
     input  logic [4:0]  rs1,
     input  logic [4:0]  rs2,
@@ -19,7 +20,7 @@ module register_file (
         if (rst_i) begin
             for (index = 1; index < 32; index = index + 1)
                 registers[index] <= 32'b0;
-        end else if (RegWrite && (rd != 5'd0)) begin
+        end else if (ce_i && RegWrite && (rd != 5'd0)) begin
             registers[rd] <= WriteData;
         end
     end

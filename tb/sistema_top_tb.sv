@@ -17,7 +17,6 @@ module sistema_top_tb;
     wire [3:0] r_o;
     wire [3:0] g_o;
     wire [3:0] b_o;
-    wire [31:0] pc_o;
 
     integer cycles = 0;
     integer mmio_writes = 0;
@@ -40,8 +39,7 @@ module sistema_top_tb;
         .vsync_o    (vsync_o),
         .r_o        (r_o),
         .g_o        (g_o),
-        .b_o        (b_o),
-        .pc_o       (pc_o)
+        .b_o        (b_o)
     );
 
     initial begin
@@ -128,8 +126,8 @@ module sistema_top_tb;
                 mmio_writes = mmio_writes + 1;
             end
 
-            if (cycles > 150)
-                $fatal(1, "Timeout sistema_top PC=%h", pc_o);
+            if (cycles > 1000)
+                $fatal(1, "Timeout sistema_top PC=%h", dut.pc_internal);
         end
     end
 

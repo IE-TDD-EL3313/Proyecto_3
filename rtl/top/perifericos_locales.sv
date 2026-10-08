@@ -15,6 +15,7 @@ module perifericos_locales (
 
     // --- Entradas del Jugador 1 (solo lectura) ---
     input  logic [6:0]  btn_raw_i,
+    input  logic        input_ack_i,
     output logic [31:0] rdata_input_o,
 
     // --- Displays de 7 segmentos ---
@@ -41,6 +42,7 @@ module perifericos_locales (
         .clk_i    (clk_i),
         .rst_i    (rst_i),
         .btn_raw_i(btn_raw_i),
+        .ack_i    (input_ack_i),
         .rdata_o  (rdata_input_o)
     );
 

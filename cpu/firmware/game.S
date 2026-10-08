@@ -169,6 +169,7 @@ cursor_up:
     beq     t1, zero, main_loop
     addi    t1, t1, -1
     sw      t1, 8(s0)
+    jal     t6, update_vga_cursor
     jal     zero, main_loop
 
 cursor_down:
@@ -177,6 +178,7 @@ cursor_down:
     bge     t1, t2, main_loop
     addi    t1, t1, 1
     sw      t1, 8(s0)
+    jal     t6, update_vga_cursor
     jal     zero, main_loop
 
 cursor_left:
@@ -184,6 +186,7 @@ cursor_left:
     beq     t1, zero, main_loop
     addi    t1, t1, -1
     sw      t1, 12(s0)
+    jal     t6, update_vga_cursor
     jal     zero, main_loop
 
 cursor_right:
@@ -192,6 +195,7 @@ cursor_right:
     bge     t1, t2, main_loop
     addi    t1, t1, 1
     sw      t1, 12(s0)
+    jal     t6, update_vga_cursor
     jal     zero, main_loop
 
 toggle_orientation:
@@ -794,6 +798,9 @@ j2_place_complete:
     addi    t0, zero, 1
     sw      t0, 4(s0)           # TURN = 1
 
+    # Mostrar cursor sobre el tablero J2.
+    jal     t6, update_vga_cursor
+
     # LED de estado: batalla.
     addi    t0, zero, 2
     sw      t0, 0x138(s1)
@@ -911,13 +918,14 @@ j2_shot_store:
     # ------------------------------------------------------------
     # Actualizar VGA del tablero de J1.
     #
-    # J1 ocupa columnas visuales 0..7.
-    # tile = fila*20 + columna
+    # J1 ocupa columnas visuales 1..8.
+    # tile = fila*20 + columna + offset_tablero
     # ------------------------------------------------------------
     slli    a2, t1, 4
     slli    a3, t1, 2
     add     a2, a2, a3
     add     a2, a2, t2
+    addi    a2, a2, 61           # offset tablero: 3 filas * 20 + 1 columna
     slli    a2, a2, 2
     add     a2, s2, a2
 
@@ -941,14 +949,20 @@ j2_shot_store:
     beq     a0, zero, j2_shot_result_hit
 
     addi    a5, zero, 72        # 'H'
+    addi    t0, zero, 10        # Buzzer: barco hundido
+    sw      t0, 0x140(s1)
     jal     zero, j2_shot_send_result
 
 j2_shot_result_hit:
     addi    a5, zero, 73        # 'I'
+    addi    t0, zero, 8         # Buzzer: impacto
+    sw      t0, 0x140(s1)
     jal     zero, j2_shot_send_result
 
 j2_shot_result_miss:
     addi    a5, zero, 70        # 'F'
+    addi    t0, zero, 9         # Buzzer: fallo
+    sw      t0, 0x140(s1)
 
 j2_shot_send_result:
     # ------------------------------------------------------------
@@ -1004,6 +1018,9 @@ j2_shot_send_result:
     # Si aun no gano, pasa el turno al Jugador 1.
     addi    a0, zero, 1
     sw      a0, 4(s0)
+
+    # J1 vuelve a tener control: mostrar cursor sobre J2.
+    jal     t6, update_vga_cursor
 
     # Informar cambio de turno: T,1\n
     addi    a0, zero, 84        # T
@@ -1081,6 +1098,9 @@ win_j2:
     addi    a0, zero, STATE_FINISHED
     sw      a0, 0(s0)
 
+    # Ocultar cursor al finalizar la partida.
+    jal     t6, update_vga_cursor
+
     # Incrementar WINS_J2.
     lw      a0, 36(s0)
     addi    a0, a0, 1
@@ -1092,6 +1112,11 @@ win_j2:
     # LED de partida terminada.
     addi    a0, zero, LED_FINISHED
     sw      a0, 0x138(s1)
+
+    # Buzzer: victoria (5 pitidos).
+    # tone_sel=100, buzz_start=1 -> 0x0C.
+    addi    t0, zero, 12
+    sw      t0, 0x140(s1)
 
     # FIN,2\n
     addi    a0, zero, 70        # F
@@ -1248,7 +1273,7 @@ shot_j1_store:
     # ------------------------------------------------------------
     # Actualizar VGA del tablero enemigo.
     #
-    # tile = fila*20 + (10 + columna)
+    # tile = fila*20 + (10 + columna) + offset_tablero
     # ------------------------------------------------------------
     slli    a2, t1, 4            # fila*16
     slli    a3, t1, 2            # fila*4
@@ -1256,6 +1281,7 @@ shot_j1_store:
 
     addi    a3, t2, 10
     add     a2, a2, a3
+    addi    a2, a2, 61           # offset tablero: 3 filas * 20 + 1 columna
 
     slli    a2, a2, 2
     add     a2, s2, a2
@@ -1281,14 +1307,20 @@ shot_j1_store:
     beq     a0, zero, shot_j1_result_hit
 
     addi    a5, zero, 72         # 'H'
+    addi    t0, zero, 10         # Buzzer: barco hundido
+    sw      t0, 0x140(s1)
     jal     zero, shot_j1_send_result
 
 shot_j1_result_hit:
     addi    a5, zero, 73         # 'I'
+    addi    t0, zero, 8          # Buzzer: impacto
+    sw      t0, 0x140(s1)
     jal     zero, shot_j1_send_result
 
 shot_j1_result_miss:
     addi    a5, zero, 70         # 'F'
+    addi    t0, zero, 9          # Buzzer: fallo
+    sw      t0, 0x140(s1)
 
 shot_j1_send_result:
     # ------------------------------------------------------------
@@ -1343,6 +1375,10 @@ shot_j1_send_result:
     # Si aun no gano, pasa el turno al Jugador 2.
     addi    a0, zero, 2
     sw      a0, 4(s0)
+
+    # Durante el turno de J2 los controles locales quedan inactivos.
+    # Ocultar cursor.
+    jal     t6, update_vga_cursor
 
     # Informar cambio de turno: T,2\n
     addi    a0, zero, 84        # T
@@ -1420,6 +1456,9 @@ win_j1:
     addi    a0, zero, STATE_FINISHED
     sw      a0, 0(s0)
 
+    # Ocultar cursor al finalizar la partida.
+    jal     t6, update_vga_cursor
+
     # Incrementar WINS_J1.
     lw      a0, 32(s0)
     addi    a0, a0, 1
@@ -1431,6 +1470,11 @@ win_j1:
     # LED de partida terminada.
     addi    a0, zero, LED_FINISHED
     sw      a0, 0x138(s1)
+
+    # Buzzer: victoria (5 pitidos).
+    # tone_sel=100, buzz_start=1 -> 0x0C.
+    addi    t0, zero, 12
+    sw      t0, 0x140(s1)
 
     # FIN,1\n
     addi    a0, zero, 70        # F
@@ -1609,7 +1653,7 @@ place_loop:
     # Escribir también la casilla correspondiente en VGA.
     #
     # Tablero J1 ocupa filas 0..7, columnas 0..7.
-    # tile = fila*20 + columna
+    # tile = fila*20 + columna + offset_tablero
     # ------------------------------------------------------------
 
     # Obtener índice RAM de la casilla actual:
@@ -1624,11 +1668,12 @@ place_loop:
     # columna = indice & 7
     andi    a5, a3, 7
 
-    # tile = fila*20 + columna
+    # tile = fila*20 + columna + offset_tablero
     slli    a6, a4, 4            # fila*16
     slli    a7, a4, 2            # fila*4
     add     a6, a6, a7           # fila*20
     add     a6, a6, a5
+    addi    a6, a6, 61           # offset tablero: 3 filas * 20 + 1 columna
     slli    a6, a6, 2            # byte offset VGA
     add     a6, s2, a6
 
@@ -1651,13 +1696,17 @@ place_loop:
     sw      zero, 12(s0)
     sw      zero, 16(s0)
 
-    # Si ya colocó los tres barcos, esperar al jugador 2.
+    # Si ya coloco los tres barcos, comprobar al jugador 2.
     addi    t1, zero, 3
     bge     t0, t1, placement_j1_complete
 
+    # Aun quedan barcos: mostrar cursor reiniciado en J1.
+    jal     t6, update_vga_cursor
     jal     zero, main_loop
 
 placement_j1_complete:
+    # J1 completo su flota: ocultar cursor mientras espera a J2.
+    jal     t6, update_vga_cursor
     # J1 ya completo su flota. Si J2 tambien habia terminado,
     # iniciar inmediatamente la batalla.
     lw      t0, 28(s0)          # PLACED_J2
@@ -1671,6 +1720,9 @@ placement_j1_complete:
     # Jugador 1 inicia.
     addi    t0, zero, 1
     sw      t0, 4(s0)           # TURN = 1
+
+    # Mostrar cursor sobre el tablero J2.
+    jal     t6, update_vga_cursor
 
     # LED de estado: batalla.
     addi    t0, zero, LED_BATTLE
@@ -1724,33 +1776,122 @@ invalid_placement:
 # Cada contador se muestra modulo 10 para garantizar un digito BCD valido.
 # ============================================================================
 update_display:
-    # WINS_J1 mod 10.
+    # Convertir victorias J1 a dos digitos decimales.
     lw      t0, 32(s0)
+    addi    t1, zero, 0          # Decenas J1
 
-update_display_j1_mod:
+update_display_j1_div:
     addi    t2, zero, 10
     blt     t0, t2, update_display_j1_ready
     addi    t0, t0, -10
-    jal     zero, update_display_j1_mod
+    addi    t1, t1, 1
+    jal     zero, update_display_j1_div
 
 update_display_j1_ready:
-    # WINS_J2 mod 10.
-    lw      t1, 36(s0)
+    # Apagar decenas si son cero.
+    bne     t1, zero, update_display_j1_pack
+    addi    t1, zero, 15
 
-update_display_j2_mod:
+update_display_j1_pack:
+    slli    t1, t1, 12
+    slli    t0, t0, 8
+    or      t3, t1, t0
+
+    # Convertir victorias J2 a dos digitos decimales.
+    lw      t0, 36(s0)
+    addi    t1, zero, 0          # Decenas J2
+
+update_display_j2_div:
     addi    t2, zero, 10
-    blt     t1, t2, update_display_j2_ready
-    addi    t1, t1, -10
-    jal     zero, update_display_j2_mod
+    blt     t0, t2, update_display_j2_ready
+    addi    t0, t0, -10
+    addi    t1, t1, 1
+    jal     zero, update_display_j2_div
 
 update_display_j2_ready:
-    # J1 ocupa el segundo nibble; J2 el primero.
-    slli    t0, t0, 4
+    # Apagar decenas si son cero.
+    bne     t1, zero, update_display_j2_pack
+    addi    t1, zero, 15
+
+update_display_j2_pack:
+    slli    t1, t1, 4
+    or      t3, t3, t1
+    or      t3, t3, t0
+
+    # DISPLAY = 0x00010130.
+    sw      t3, 0x130(s1)
+
+    jalr    zero, 0(t6)
+
+# ============================================================================
+# update_vga_cursor
+#
+# Actualiza VGA_CTRL = 0x00010148.
+#
+# Formato:
+#   bit 7    = visible
+#   bit 6    = tablero (0=J1, 1=J2)
+#   bits 5:3 = fila
+#   bits 2:0 = columna
+#
+# Colocacion:
+#   cursor visible sobre J1 mientras PLACED_J1 < 3.
+#
+# Batalla:
+#   cursor visible sobre J2 solamente durante el turno de J1.
+#
+# Finalizado o esperando al J2:
+#   cursor oculto.
+#
+# Retorno mediante t6 para no alterar ra.
+# ============================================================================
+update_vga_cursor:
+    lw      t0, 0(s0)            # GAME_STATE
+
+    addi    t1, zero, STATE_PLACEMENT
+    beq     t0, t1, update_cursor_placement
+
+    addi    t1, zero, STATE_BATTLE
+    beq     t0, t1, update_cursor_battle
+
+    # STATE_FINISHED.
+    sw      zero, 0x148(s1)
+    jalr    zero, 0(t6)
+
+update_cursor_placement:
+    # Si J1 ya termino de colocar, ocultar cursor.
+    lw      t0, 24(s0)           # PLACED_J1
+    addi    t1, zero, 3
+    bge     t0, t1, update_cursor_hide
+
+    # visible=1, board=0 (J1)
+    addi    t0, zero, 0x80
+    jal     zero, update_cursor_position
+
+update_cursor_battle:
+    # Solo mostrar cursor durante el turno de J1.
+    lw      t0, 4(s0)            # TURN
+    addi    t1, zero, 1
+    bne     t0, t1, update_cursor_hide
+
+    # visible=1, board=1 (J2)
+    addi    t0, zero, 0xC0
+
+update_cursor_position:
+    # Incorporar fila.
+    lw      t1, 8(s0)
+    slli    t1, t1, 3
     or      t0, t0, t1
 
-    # DISPLAY = 0x00010130 = s1 + 0x130.
-    sw      t0, 0x130(s1)
+    # Incorporar columna.
+    lw      t1, 12(s0)
+    or      t0, t0, t1
 
+    sw      t0, 0x148(s1)
+    jalr    zero, 0(t6)
+
+update_cursor_hide:
+    sw      zero, 0x148(s1)
     jalr    zero, 0(t6)
 
 
@@ -1826,6 +1967,9 @@ clear_vga:
     addi    t0, t0, 4
     addi    t1, t1, -1
     bne     t1, zero, clear_vga
+
+    # Mostrar cursor inicial sobre J1 en (0,0).
+    jal     t6, update_vga_cursor
 
     # Indicar fase de colocacion.
     addi    t0, zero, LED_PLACEMENT

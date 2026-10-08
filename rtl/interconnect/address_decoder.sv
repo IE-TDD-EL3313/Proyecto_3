@@ -14,6 +14,7 @@
 //   DISPLAY  : 0x0001_0130
 //   LED      : 0x0001_0138
 //   BUZZER   : 0x0001_0140
+//   VGA_CTRL : 0x0001_0148
 //   VGA      : 0x0001_1000 - 0x0001_17FF
 //
 // INPUT es de solo lectura.
@@ -29,6 +30,7 @@ module address_decoder (
     output logic sel_display_o,
     output logic sel_led_o,
     output logic sel_buzzer_o,
+    output logic sel_vga_ctrl_o,
     output logic sel_vga_o,
 
     output logic we_ram_o,
@@ -36,6 +38,7 @@ module address_decoder (
     output logic we_display_o,
     output logic we_led_o,
     output logic we_buzzer_o,
+    output logic we_vga_ctrl_o,
     output logic we_vga_o
 );
 
@@ -47,6 +50,7 @@ module address_decoder (
         sel_display_o = 1'b0;
         sel_led_o     = 1'b0;
         sel_buzzer_o  = 1'b0;
+        sel_vga_ctrl_o = 1'b0;
         sel_vga_o     = 1'b0;
 
         // RAM
@@ -75,6 +79,10 @@ module address_decoder (
         else if (DataAddress_i == 32'h0001_0140)
             sel_buzzer_o = 1'b1;
 
+        // Control de cursor VGA
+        else if (DataAddress_i == 32'h0001_0148)
+            sel_vga_ctrl_o = 1'b1;
+
         // Memoria de video VGA
         else if ((DataAddress_i >= 32'h0001_1000) &&
                  (DataAddress_i <= 32'h0001_17FF))
@@ -87,8 +95,9 @@ module address_decoder (
         we_uart_o    = we_i && sel_uart_o;
         we_display_o = we_i && sel_display_o;
         we_led_o     = we_i && sel_led_o;
-        we_buzzer_o  = we_i && sel_buzzer_o;
-        we_vga_o     = we_i && sel_vga_o;
+        we_buzzer_o   = we_i && sel_buzzer_o;
+        we_vga_ctrl_o = we_i && sel_vga_ctrl_o;
+        we_vga_o      = we_i && sel_vga_o;
     end
 
 endmodule

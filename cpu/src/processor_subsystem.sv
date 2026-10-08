@@ -2,7 +2,7 @@
 // Todos los accesos son palabras de 32 bits con direccion expresada en bytes.
 // Lecturas combinacionales, escrituras en flanco ascendente; no hay ready/stall.
 module processor_subsystem #(parameter ROM_FILE="firmware/handoff.hex") (
- input logic clk_i, rst_i,
+ input logic clk_i, rst_i, ce_i,
  input logic [31:0] mmio_rdata_i,
  output logic [31:0] mmio_addr_o, mmio_wdata_o,
  output logic mmio_sel_o, mmio_we_o,
@@ -18,7 +18,7 @@ module processor_subsystem #(parameter ROM_FILE="firmware/handoff.hex") (
  assign mmio_addr_o=address;
  assign mmio_wdata_o=wdata;
  assign rdata=ram_sel ? ram_data : (mmio_sel_o ? mmio_rdata_i : 32'b0);
- riscv_core core(.clk_i(clk_i),.rst_i(rst_i),.ProgIn_i(instruction),.DataIn_i(rdata),
+ riscv_core core(.clk_i(clk_i),.rst_i(rst_i),.ce_i(ce_i),.ProgIn_i(instruction),.DataIn_i(rdata),
   .ProgAddress_o(pc_o),.DataAddress_o(address),.DataOut_o(wdata),.we_o(core_we));
  program_rom #(.INIT_FILE(ROM_FILE)) rom(.addr_i(pc_o),.instr_o(instruction));
  data_ram ram(.clk_i(clk_i),.we_i(core_we && ram_sel && !rst_i),
