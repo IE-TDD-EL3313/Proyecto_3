@@ -1227,40 +1227,107 @@ El sistema utiliza dos relojes: `clk_i` de 100 MHz, que viene del oscilador de l
 
 ### 9.1 Estructura general del programa
 
-<!-- Sugerencia: secciones del programa, constantes de direcciones, etiquetas
-principales y flujo general. -->
+El programa `cpu/firmware/game.S` (2373 líneas de código fuente) se ensambla en **1109 instrucciones (4436 bytes)** y se enlaza en la dirección 0 con `link.ld`. Utiliza `.option norvc` y `.option norelax` para que todas las instrucciones sean de 32 bits y las direcciones de salto no cambien. Se organiza en las siguientes secciones:
+
+1. **Constantes** (`.equ`): direcciones MMIO (`UART_STATUS`, `UART_TX`, `UART_RX`, `INPUT`, `DISPLAY`, `LED`, `BUZZER`, `VGA_BASE`), variables de RAM (`GAME_STATE`, `TURN`, `BOARD_J1`, `SHOTS_J1`, …), estados, valores de casilla, máscaras de botones y valores de LED.
+2. **Inicio y lazo principal** (`_start`, `main_loop`): carga las bases en `s0`, `s1` y `s2`, pone a cero las victorias y llama a `init_game`.
+3. **Controles locales** (`controls_placement`, `controls_battle`, `cursor_*`, `toggle_orientation`).
+4. **Recepción UART** (`poll_uart`, estados `uart_state_0` … `uart_state_14`), transmisión (`uart_putc`) y procesamiento de tramas (`process_uart_frame`, `process_uart_place`, `process_uart_shot`).
+5. **Colocación y disparo del J1** (`place_ship_j1`, `shot_j1`).
+6. **Verificación de hundimiento y victoria** (`check_ship_sunk_j1/j2`, `check_win_j1/j2`, `win_j1`, `win_j2`).
+7. **Presentación** (`update_display`, `update_vga_score`, `update_vga_stats`, `update_vga_cursor`, `draw_vga_title`).
+8. **Inicialización** (`init_game`, `clear_*`, `clear_vga`).
+
+El flujo general es un **lazo de sondeo** (*polling*) sin interrupciones: en cada vuelta de `main_loop` se llama a `poll_uart`, luego a `process_uart_frame`, se lee el registro de botones, se atiende BTN_RST y se despachan los controles según `GAME_STATE`.
 
 ### 9.2 Convenciones de llamado y uso de registros
 
-<!-- Sugerencia: tabla registro → uso, paso de argumentos y retorno, manejo de la pila. -->
+**Tabla 9.1.** Uso de registros en `game.S`.
+
+| Registro | Uso |
+|---|---|
+| `zero` (x0) | Constante 0 |
+| `ra` (x1) | Retorno de `init_game`, `poll_uart`, `process_uart_frame`, `check_*` (llamadas con `jal ra`) |
+| `s0` (x8) | Base de la RAM, `0x0000_2000` (permanente) |
+| `s1` (x9) | Base MMIO, `0x0001_0000` (permanente) |
+| `s2` (x18) | Base del VGA, `0x0001_1000` (permanente) |
+| `t0`–`t4` | Temporales de cada rutina |
+| `t5` | Retorno alternativo de `update_vga_score` y `update_vga_stats` (`jal t5`) |
+| `t6` | Retorno alternativo de `uart_putc`, `update_display`, `update_vga_cursor`, `draw_vga_title` (`jal t6`) |
+| `a0` | Argumento de `uart_putc` (carácter ASCII); entrada y salida de `check_ship_sunk_*` y `check_win_*` |
+| `a1`–`a7` | Temporales de cálculo de direcciones y de resultado (`a5` guarda el carácter de resultado F/I/H) |
+
+No se utiliza la pila (`sp`): como el programa solo tiene tres niveles de anidamiento de llamadas, las rutinas que ya ocupan `ra` invocan a las hojas con `jal t5`/`jal t6` y regresan con `jalr zero, 0(t6)`. Los parámetros se pasan por registros y por las variables de RAM (por ejemplo `UART_ROW` y `UART_COL`, que `process_uart_shot` vuelve a leer después de transmitir porque `uart_putc` usa `t0`).
 
 ### 9.3 Máquina de estados del juego
 
-<!-- Sugerencia: diagrama de estados del control principal con las condiciones de
-transición. -->
+El estado se guarda en `GAME_STATE` (`0x2000`) y determina qué controles locales y qué tramas UART se aceptan.
+
+```mermaid
+stateDiagram-v2
+    [*] --> COLOCACION: init_game
+    COLOCACION --> BATALLA: PLACED_J1 = 3 y PLACED_J2 = 3
+    BATALLA --> FINALIZADO: flota completa hundida (win_j1 / win_j2)
+    COLOCACION --> COLOCACION: BTN_RST
+    BATALLA --> COLOCACION: BTN_RST
+    FINALIZADO --> COLOCACION: BTN_RST
+```
+
+**Figura 9.1.** Máquina de estados del juego. En el estado COLOCACION se aceptan los controles locales de colocación y las tramas `P`; en BATALLA, los disparos del J1 (solo con `TURN = 1`) y las tramas `S` (solo con `TURN = 2`); en FINALIZADO solo BTN_RST.
+
+**Tabla 9.2.** Estados y acciones.
+
+| Estado (`GAME_STATE`) | LED | Entradas aceptadas | Salidas |
+|---|---|---|---|
+| 0 `STATE_PLACEMENT` | `001` | Botones de cursor, SEL, OK; tramas `P` | `PA`/`PR`, tiles de barcos del J1 |
+| 1 `STATE_BATTLE` | `010` | OK y cursor (turno J1); trama `S` (turno J2) | `DR`/`SR`, `T`, tiles de impacto/fallo, buzzer |
+| 2 `STATE_FINISHED` | `100` | Solo BTN_RST | `FIN`, victoria en display y buzzer |
 
 ### 9.4 Subrutinas principales
 
-<!-- Sugerencia: tabla (Subrutina | Entradas | Salidas | Descripción). -->
+**Tabla 9.3.** Subrutinas principales de `game.S`.
+
+| Subrutina | Entradas | Salidas | Descripción |
+|---|---|---|---|
+| `init_game` | — | — | Reinicia variables, tableros, parser y VGA; dibuja título y marcadores; LED de colocación |
+| `poll_uart` | Estado UART | `UART_FRAME_READY` | Lee un byte pendiente y avanza el parser de 15 estados |
+| `process_uart_frame` | `UART_FRAME_READY`, `UART_CMD` | — | Despacha la trama `P` o `S` completa |
+| `process_uart_place` | `UART_SHIP/ROW/COL/ORIENT` | `PA` o `PR` | Valida duplicado, límites y traslape y coloca el barco del J2 |
+| `process_uart_shot` | `UART_ROW/COL` | `SR`, `T`, `FIN` | Valida estado, turno y repetición; resuelve el disparo del J2 |
+| `uart_putc` | `a0` = carácter | — | Espera `TX_BUSY = 0` y transmite el byte |
+| `place_ship_j1` | Cursor, orientación, `CURRENT_SHIP` | — | Valida y coloca el barco del J1 en `BOARD_J1` y el VGA; inicia la batalla si J2 terminó |
+| `shot_j1` | Cursor | `DR`, `T`, `FIN` | Resuelve el disparo local y cambia el turno |
+| `check_ship_sunk_j1/j2` | `a0` = identidad del barco (1–3) | `a0` = 1 si hundido | Recorre el tablero buscando casillas del barco sin impacto |
+| `check_win_j1/j2` | — | `a0` = 1 si ganó | Recorre el tablero rival buscando casillas de barco sin impacto |
+| `win_j1`, `win_j2` | — | — | Fin de la partida: estado, victorias, LED, buzzer, `FIN` |
+| `update_display` | `WINS_J1`, `WINS_J2` | Registro `DISPLAY` | Convierte los contadores a BCD de 2 dígitos y llama a `update_vga_score` |
+| `update_vga_cursor` | Estado, turno, cursor | Registro `0x148` | Calcula y escribe el registro del cursor |
+| `update_vga_stats` | `SHOTS_J1`, `SHOTS_J2` | Tiles del HUD | Cuenta aciertos y fallos de cada jugador y los dibuja (`A:xx F:xx`) |
+| `draw_vga_title` | — | Tiles | Escribe «BATALLA NAVAL» en la fila 0, columnas 4 a 16 |
 
 ### 9.5 Fase de colocación de barcos
 
-<!-- Sugerencia: cursor, rotación, validación, colocación concurrente de ambos jugadores y
-control de quién terminó. -->
+**Jugador 1 (botones).** El cursor (`CURSOR_ROW`, `CURSOR_COL`) se mueve dentro de 0–7 con los cuatro botones de navegación, y cada movimiento llama a `update_vga_cursor`. SEL (`toggle_orientation`) invierte `ORIENTATION` mediante `xori`. OK ejecuta `place_ship_j1`, que calcula la longitud `4 − CURRENT_SHIP`, comprueba que `columna + longitud ≤ 8` (horizontal) o `fila + longitud ≤ 8` (vertical), recorre las casillas con paso de 4 bytes (horizontal) o 32 bytes (vertical) para detectar traslapes y, si todo es válido, escribe la identidad del barco (`CURRENT_SHIP + 1`) en `BOARD_J1` y el tile de barco en el VGA (`índice = fila·20 + columna + 121`, es decir fila 6 y columna 1 como origen). Si no es válida, escribe `0x0B` en el buzzer (`invalid_placement`). Al colocar, incrementa `CURRENT_SHIP` y `PLACED_J1`, y reinicia el cursor y la orientación.
+
+**Jugador 2 (UART).** Cada trama `P` pasa por `process_uart_place`: solo se acepta en estado de colocación, se rechaza con `PR,barco,O` si el barco ya fue colocado (`J2_SHIP_MASK`) o hay traslape, y con `PR,barco,F` si sale del tablero. Si es válida, escribe `barco + 1` en `BOARD_J2` (sin tocar el VGA), actualiza la máscara e incrementa `PLACED_J2`, y responde `PA,barco`.
+
+**Concurrencia.** Ambos jugadores colocan en cualquier orden, porque el lazo principal atiende botones y UART en cada vuelta. Cuando J1 completa su flota se oculta el cursor y se espera al J2; cuando el segundo en terminar completa su flota se ejecuta el inicio de batalla (estado 1, turno 1, LED `010`, cursor sobre el tablero del J2) y se envían `B` y `T,1`. La prueba 26 de `game_firmware_tb` verifica el caso en que J2 termina primero.
 
 ### 9.6 Fase de batalla
 
-<!-- Sugerencia: turnos, lectura de entradas y tramas, validación de disparo repetido,
-actualización de tableros y de los periféricos. -->
+**Turno del J1.** Solo si `TURN = 1` se atienden los botones. OK ejecuta `shot_j1`: calcula el índice `fila·8 + columna`, ignora el disparo si `SHOTS_J1[índice] ≠ 0` (disparo repetido), consulta `BOARD_J2` (0 = fallo, otro valor = impacto), guarda `CELL_HIT` o `CELL_MISS` en `SHOTS_J1`, escribe el tile en el VGA (`fila·20 + (10 + columna) + 121`, el tablero del J2 empieza en la columna 11), calcula si el barco quedó hundido (`check_ship_sunk_j2`), activa el buzzer (`0x08` impacto, `0x09` fallo, `0x0A` hundido), transmite `DR,fila,col,resultado`, actualiza las estadísticas del HUD y comprueba la victoria (`check_win_j1`). Si no ganó, oculta el cursor, cambia a `TURN = 2` y envía `T,2`.
+
+**Turno del J2.** `process_uart_shot` descarta la trama si el estado no es batalla o `TURN ≠ 2`, o si la casilla ya fue disparada. En caso contrario consulta `BOARD_J1`, guarda el resultado en `SHOTS_J2`, actualiza el VGA del tablero del J1 (fila 6, columna 1 de origen), activa el buzzer, responde `SR,fila,col,resultado`, comprueba `check_win_j2` y, si no ganó, devuelve el turno al J1, muestra el cursor y envía `T,1`.
+
+El resultado de cada disparo se codifica con los caracteres `F` (fallo), `I` (impacto) y `H` (hundido). Las pruebas 15 a 22 de `game_firmware_tb` cubren estos casos.
 
 ### 9.7 Fin de la partida
 
-<!-- Sugerencia: resultado en VGA, resumen enviado por UART, contadores y reinicio. -->
+`win_j1` y `win_j2` ponen `GAME_STATE = 2`, ocultan el cursor, incrementan `WINS_J1` o `WINS_J2`, actualizan el display y el marcador del VGA mediante `update_display`, escriben `LED_FINISHED` (`100`), activan el buzzer de victoria (`0x0C`) y envían `FIN,1` o `FIN,2`. En este estado el lazo principal ignora todo salvo BTN_RST (y los disparos por UART se descartan). BTN_RST llama a `init_game`, que reinicia la partida sin borrar `WINS_J1` y `WINS_J2`, por lo que el marcador se conserva entre partidas; solo un reset de la tarjeta (botón CPU RESET) lo pone a cero. Las pruebas 23 a 25 y 27 de `game_firmware_tb` verifican estos comportamientos.
 
 ### 9.8 Ocultamiento de información
 
-<!-- Sugerencia: cómo se garantiza que ningún jugador recibe la disposición de la flota del
-otro. -->
+La disposición de ambas flotas existe únicamente en `BOARD_J1` y `BOARD_J2`, en la RAM del procesador. Hacia el **VGA** el programa solo escribe: los barcos del J1 (que es el único espectador del monitor, porque el monitor está conectado al lado del J1) en su propio tablero, y los resultados de disparo (impacto o fallo) en ambos tableros; **nunca** escribe los barcos del J2, de modo que `process_uart_place` no modifica el VGA. Hacia la **UART** el programa solo transmite `PA`/`PR` (aceptación o rechazo de colocaciones del propio J2), `B`, `T`, y los resultados `SR` y `DR` de cada disparo (coordenada y F/I/H), así como `FIN`; la posición de los barcos del J1 jamás se envía. Los registros `SHOTS_J1` y `SHOTS_J2` almacenan solo impacto o fallo. Como consecuencia, la aplicación de PC solo puede reconstruir la flota del J1 a medida que J2 dispara, y el J1 solo ve la flota del J2 a medida que dispara.
 
 ---
 
@@ -1268,17 +1335,49 @@ otro. -->
 
 ### 10.1 Arquitectura de la aplicación
 
-<!-- Sugerencia: lenguaje, librería serial, configuración del puerto y estructura. -->
+La aplicación está escrita en Python 3 con **Tkinter** para la interfaz y **pyserial** para el puerto serial. Se divide en cuatro módulos (`pc/src`):
+
+**Tabla 10.1.** Módulos de la aplicación de PC.
+
+| Módulo | Responsabilidad |
+|---|---|
+| `protocol.py` | Construye tramas `P` y `S` (`build_placement`, `build_shot`) y valida e interpreta las tramas recibidas (`parse_message`, clase `Message`) |
+| `serial_link.py` | Clase `SerialLink`: abre el puerto a 115 200 baudios 8N1, envía y recibe líneas ASCII y convierte errores a `SerialLinkError` |
+| `player2_state.py` | Clase `Player2State`: estado mostrado (tablero propio, tablero rival, turno, fase, mensajes), sin reglas de juego |
+| `player2.py` | Interfaz gráfica `Player2App` y punto de entrada con `argparse` |
+
+El puerto se indica con `--port` (por omisión `/dev/ttyUSB0`) y se abre desde la interfaz con el botón «Conectar». La lectura es no bloqueante: `_poll_serial` se ejecuta cada 50 ms (`root.after`) y procesa todas las líneas disponibles; el *timeout* de lectura del puerto es de 0,1 s.
 
 ### 10.2 Interfaz de usuario
 
-<!-- Sugerencia: tablero propio, estado conocido del tablero rival e indicador de turno. -->
+La ventana «Batalla Naval - Jugador 2» contiene: un panel **Conexión UART** (puerto, botón Conectar y la velocidad «115200 8N1»); dos tableros de 8×8 casillas, **Mi tablero** y **Tablero rival**; un panel **Colocación de barcos** (selección de fila y columna, botones «Rotar barco (R)» y «Confirmar colocación»); un panel **Disparo** («Confirmar disparo» y el objetivo seleccionado); y un panel **Estado de la partida** con el último mensaje (por ejemplo «Turno del Jugador 2.» o «Fase de batalla iniciada.»).
+
+En el tablero propio se muestra una vista previa del barco en verde (válida) o rojo claro (inválida) antes de confirmar. Una casilla se pinta con azul (barco propio), gris (fallo), rojo (impacto) o rojo oscuro (hundido); el tablero rival solo muestra los impactos y fallos confirmados por la FPGA. Al recibir `FIN` se presenta un cuadro de diálogo con el resultado.
+
+<!-- PENDIENTE: insertar captura de la ventana de la aplicación (ver 12.2) -->
 
 ### 10.3 Validación de entradas y manejo de errores
 
+La validación local evita enviar tramas mal formadas y no sustituye la validación definitiva de la FPGA:
+
+- `build_placement` y `build_shot` rechazan identificadores de barco fuera de 0–2, filas y columnas fuera de 0–7 y orientaciones distintas de `H`/`V` (aceptan minúsculas) lanzando `ProtocolError`.
+- `Player2App` impide confirmar colocaciones cuando la fase terminó, cuando ya se colocaron los tres barcos, cuando hay una colocación pendiente de respuesta o cuando la vista previa es inválida (fuera del tablero o traslape), y solo permite disparar si se seleccionó una casilla del tablero rival.
+- `SerialLink` valida que el puerto esté abierto, que la trama sea texto ASCII terminado en `\n` y convierte los errores del puerto (`SerialException`) en `SerialLinkError`, que la interfaz muestra en la barra de estado.
+- Las tramas recibidas que no cumplen el formato (tipo desconocido, número de campos incorrecto, valores fuera de rango o sin terminador) lanzan `ProtocolError`, que se muestra como «Error de comunicación» sin detener la aplicación.
+
+Las 59 pruebas unitarias de `pc/tests` verifican estos casos.
+
 ### 10.4 Interpretación de paquetes
 
+`parse_message` recibe una línea terminada en `\n` (se tolera `\r\n`), la separa por comas y, según el primer campo, valida el número de campos y los rangos: `PA,barco`, `PR,barco,{F|O}`, `B`, `T,{1|2}`, `SR`/`DR,fila,col,{F|I|H}` y `FIN,{1|2}`. Devuelve un objeto `Message` con el tipo y los campos. `Player2State.handle_message` actualiza el estado: `PA` confirma el barco en el tablero propio, `PR` muestra el motivo («La colocación se traslapa con otro barco.» o «El barco queda fuera del tablero.»), `B` marca el inicio de la batalla, `T` actualiza el turno, `SR` marca en el tablero propio el resultado del disparo del rival, `DR` marca en el tablero rival el resultado del disparo del J1 (la FPGA lo reporta al J2) y `FIN` termina la partida y registra al ganador.
+
 ### 10.5 Instrucciones de ejecución
+
+1. Instalar Python 3 y las dependencias: `pip install pyserial` (Tkinter viene incluido en la mayoría de instalaciones de Python).
+2. Programar la FPGA con el bitstream y conectar el cable USB de la Nexys 4; identificar el puerto serie (por ejemplo `COM3` en Windows o `/dev/ttyUSB0` en Linux).
+3. Ejecutar desde la carpeta `pc/src`: `python player2.py --port <puerto>`.
+4. Pulsar «Conectar», colocar los tres barcos (el barco de 4, luego 3 y luego 2) y esperar el mensaje «Fase de batalla iniciada.».
+5. Pruebas automáticas: desde `pc`, `python -m unittest discover -s tests -p "test_*.py"`.
 
 ---
 
