@@ -36,3 +36,17 @@ xsim.dir/
 
 # Firmware - artefactos de compilacion
 cpu/build/
+
+# Vivado - checkpoints, bitstreams y reportes generados
+*.dcp
+*.bit
+*.rpt
+*.rpx
+*.rst
+
+# Vivado - archivos auxiliares
+__synthesis_is_complete__
+clockInfo.txt
+
+# Copias de respaldo de SystemVerilog
+*.sv.bak
