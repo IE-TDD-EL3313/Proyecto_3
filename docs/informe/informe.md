@@ -410,62 +410,75 @@ el concepto con lo implementado en el proyecto; no basta con teoría abstracta. 
 
 ### 4.1 Arquitectura RISC-V y el subconjunto rv32i
 
-<!-- Sugerencia: formatos de instrucción, codificación, banco de registros y qué
-subconjunto se implementó. -->
+RISC-V es una arquitectura de conjunto de instrucciones abierta y modular. La base de enteros de 32 bits (rv32i) define 32 registros de propósito general (`x0` vale siempre cero) y instrucciones de 32 bits con seis formatos: R (registro–registro), I (inmediato y cargas), S (almacenamientos), B (bifurcaciones), U (inmediato superior) y J (saltos). En todos ellos `opcode` ocupa los bits [6:0], y `rd`, `funct3`, `rs1`, `rs2` y `funct7` aparecen siempre en las mismas posiciones, lo que simplifica el decodificador. Los inmediatos se extienden en signo desde el bit 31.
+
+En este proyecto se implementó el subconjunto de 29 instrucciones listado en la Tabla 3.4: aritmética, lógica, desplazamientos, comparaciones, `LW`/`SW`, cuatro bifurcaciones, `JAL`, `JALR`, `LUI` y `AUIPC`. Es suficiente para que el ensamblador (`-march=rv32i`) genere todo el programa del juego sin recurrir a multiplicación ni a accesos de byte: las multiplicaciones por 8 o 20 se resuelven con desplazamientos y sumas (por ejemplo, `fila*20 = (fila<<4) + (fila<<2)` en `game.S`). El módulo `instruction_decoder` separa los campos y `immediate_generator` construye los inmediatos I, S, B, J y U.
 
 ### 4.2 Datapath de ciclo único y unidad de control
 
-<!-- Sugerencia: organización del ciclo único, señales de control, generación de
-inmediatos y relación entre el camino crítico y la frecuencia de operación. -->
+En un procesador de ciclo único cada instrucción se completa en un único ciclo de reloj: se busca la instrucción, se decodifica, se leen los registros, se opera en la ALU, se accede a memoria si corresponde y se escribe el resultado. La unidad de control (`control_unit`) genera, a partir de `opcode`, `funct3` y `funct7`, las señales que gobiernan los multiplexores (`ALUSrcA`, `ALUSrcB`, `ResultSrc`), la operación de la ALU, la escritura del banco de registros y la escritura de memoria. El siguiente PC se elige entre `PC+4` y el destino de salto según el comparador de bifurcaciones.
+
+La frecuencia máxima de un diseño de ciclo único está limitada por el camino crítico: la ruta más larga entre el PC, la ROM, el banco de registros, la ALU, la RAM o los periféricos y el registro de destino. Para no depender de que ese camino quepa en 10 ns, el sistema integra una **habilitación de reloj** (`cpu_ce`) que permite que el PC, el banco de registros y las escrituras ocurran una vez cada 4 ciclos de `clk_i`. Funcionalmente el procesador sigue siendo de ciclo único (una instrucción por cada confirmación), pero el análisis de timing puede tratar esas rutas como *multicycle path* de 4 ciclos (40 ns), lo que se declara en el archivo de restricciones. La velocidad efectiva es de 100 MHz / 4 = 25 MIPS como máximo, sobrada para un juego por turnos.
 
 ### 4.3 Memorias y buses independientes de programa y datos
 
-<!-- Sugerencia: por qué buses separados para instrucciones y datos y su efecto en el
-ciclo de instrucción. -->
+Una arquitectura tipo Harvard usa memorias y buses distintos para instrucciones y datos. En este diseño la ROM se conecta al núcleo por `ProgAddress_o`/`ProgIn_i` y la RAM y los periféricos comparten el bus de datos (`DataAddress_o`, `DataOut_o`, `we_o`, `DataIn_i`). Como la búsqueda de la instrucción y el acceso a datos pueden ocurrir en el mismo ciclo sin competir por un puerto, una instrucción `LW` o `SW` no necesita ciclos adicionales y el ciclo de instrucción se mantiene único. La ROM (8 KiB) se inicializa desde `game.hex` con `$readmemh`, y la RAM (4 KiB) conserva su contenido ante un reset, por lo que el firmware inicializa explícitamente todas las variables antes de usarlas (`init_game`).
 
 ### 4.4 Entrada/salida mapeada en memoria
 
-<!-- Sugerencia: concepto, decodificación de direcciones y registros de control, estado
-y datos. -->
+En la E/S mapeada en memoria los registros de los periféricos ocupan direcciones del mismo espacio que la memoria de datos, y el procesador los accede con las mismas instrucciones `LW`/`SW`. Un decodificador de direcciones (`address_decoder`) compara la dirección con el rango de cada dispositivo y produce una señal de selección `sel_X` y una habilitación de escritura `we_X = we & sel_X`; un multiplexor de lectura (`read_mux`) devuelve al núcleo el dato del dispositivo seleccionado, o cero si ninguno lo está. Cada periférico expone registros de **control** (por ejemplo el buzzer y el cursor VGA), de **estado** (el STATUS del UART) y de **datos** (TX, RX, tiles y marcador). Este esquema evita instrucciones especiales de E/S y permite que el programa en ensamblador controle todo el hardware con direcciones constantes (Tabla 3.3).
+
+Un cuidado importante es que las lecturas pueden tener efectos secundarios: el registro de entradas se limpia al leerse. Por ello `sistema_top` genera `input_ack_i` solo cuando se lee esa dirección en el ciclo en que el CPU confirma la instrucción (`cpu_ce`), y no por el simple hecho de que la dirección esté seleccionada.
 
 ### 4.5 Generación de video VGA
 
-<!-- Sugerencia: sincronismos horizontal y vertical, resolución, tabla de temporización
-(zona visible, front porch, pulso, back porch, total), reloj de píxel y cálculo de la
-frecuencia de refresco. -->
+Un monitor VGA se refresca recorriendo la imagen línea por línea. Dos señales de sincronismo (`hsync`, `vsync`, activas en bajo) delimitan cada línea y cada cuadro; entre ellos, el intervalo visible lleva los colores analógicos de los tres canales. Una resolución de 640×480 a 60 Hz usa un reloj de píxel nominal de 25,175 MHz; en este proyecto se emplea 25 MHz, que está dentro de la tolerancia de los monitores comunes.
+
+**Tabla 4.1.** Temporización VGA 640×480@60 Hz (en períodos de reloj de píxel y en líneas).
+
+| Parámetro | Horizontal (píxeles) | Vertical (líneas) |
+|---|---|---|
+| Zona visible | 640 | 480 |
+| Front porch | 16 | 10 |
+| Pulso de sincronismo | 96 | 2 |
+| Back porch | 48 | 33 |
+| **Total** | **800** | **525** |
+
+La frecuencia de refresco es `f_pix / (800·525) = 25 MHz / 420 000 ≈ 59,52 Hz`. El generador `vga_timing` implementa dos contadores (`hcount` de 0 a 799 y `vcount` de 0 a 524), genera `hsync` y `vsync` por comparación de rangos y produce `video_on` cuando `hcount < 640` y `vcount < 480`. La salida de color se fuerza a negro fuera de la zona visible.
 
 ### 4.6 Gráficos orientados a tiles frente a framebuffer
 
-<!-- Sugerencia: por qué un framebuffer completo no es práctico aquí y cómo el mapa de
-tiles reduce memoria y trabajo del CPU. Comparar tamaños de memoria. -->
+Un *framebuffer* completo almacena el color de cada píxel: 640×480 = 307 200 píxeles; con 12 bits por píxel son 3 686 400 bits (≈ 3,5 Mbit), un 72 % de la memoria de bloque de la FPGA XC7A100T (4,86 Mbit) y, sobre todo, obligaría al CPU a escribir cientos de miles de palabras para redibujar la pantalla. Un mapa de *tiles* almacena en cambio un código por cada bloque de 32×32 píxeles: 20×15 = 300 palabras de 32 bits = 9 600 bits, unas 380 veces menos. Actualizar una casilla del juego cuesta una sola escritura, y el hardware calcula el color de cada píxel a partir del código del tile (agua, barco, impacto, fallo o carácter de texto) y de la posición dentro del tile. Esta es la razón por la que la lógica de juego (en ensamblador) puede dibujar los tableros, el marcador y el título con sencillas escrituras a `0x0001_1000 + 4·n`.
 
 ### 4.7 Memorias de doble puerto y cruce de dominios de reloj
 
-<!-- Sugerencia: memoria con puertos en relojes distintos, tratamiento de la
-sincronización entre dominios y generación del reloj de píxel con PLL. -->
+La memoria de tiles es escrita por el CPU en el dominio de `clk_i` (100 MHz) y leída por la lógica de video en el dominio del reloj de píxel (25 MHz). Se modela como una memoria de doble puerto con dos relojes independientes: el puerto A escribe de forma síncrona con `clk_i` y el puerto B lee de forma síncrona con `clk_pix`. Como cada puerto es síncrono con su propio reloj y el CPU nunca lee la memoria de video, no se requiere un sincronizador adicional para los datos: la memoria desacopla ambos dominios. La lectura tiene una latencia de un ciclo de `clk_pix`, que se compensa retrasando un ciclo las señales de posición (`video_on`, posición dentro del tile y columna/fila del tile) que viajan hacia el generador de color.
+
+El reloj de píxel se obtiene con un PLL/MMCM (Clocking Wizard, `clk_wiz_pixel`) a partir de los 100 MHz de la tarjeta. La señal `locked` del PLL indica que el reloj es estable, y el reset del dominio de video se mantiene activo hasta que `locked = 1` (`rst_pix = rst_i | ~pll_locked`). Las únicas señales que cruzan de dominio son el reset (de `clk_i` a `clk_pix`), que se mantiene activo hasta que el PLL está estable, y el registro del cursor, que cambia de forma infrecuente y cuyo efecto visual es tolerante a una actualización de un cuadro.
 
 ### 4.8 Metaestabilidad y sincronización de entradas asíncronas
 
-<!-- Sugerencia: sincronizador de dos etapas aplicado a botones y a la recepción UART. -->
+Cuando una señal asíncrona (un pulsador, el pin de recepción de la UART) llega a un flip-flop y cambia cerca del flanco de reloj, la salida puede tardar un tiempo no acotado en resolverse a un nivel válido (metaestabilidad). La solución estándar es un sincronizador de dos flip-flops en cascada: el primero puede quedar metaestable, pero el segundo captura una señal que ya se resolvió con probabilidad muy alta. En este proyecto cada una de las siete líneas de `btn_input` pasa por un sincronizador de dos etapas antes de cualquier otra lógica, y `uart_rx` toma `uart_rx_i` a través de un registro de sincronización antes de muestrear los bits.
 
 ### 4.9 Antirrebote de pulsadores
 
-<!-- Sugerencia: rebote mecánico, filtro temporizado, detección de flanco y su
-aplicación al periférico de entradas. -->
+Los contactos mecánicos rebotan durante unos milisegundos al cerrarse o abrirse, generando múltiples transiciones. Un filtro temporizado solo acepta un nuevo valor cuando la entrada se mantiene estable durante un tiempo mínimo; en este proyecto se reutiliza `button_debouncer` (del Proyecto 2) con una ventana de 10 ms, contada con una base de 1 ms (`ce_1ms`), es decir, 1 000 000 de ciclos de `clk_i` entre cambios aceptados. Tras el filtro, un detector de flanco compara el valor estable actual con el anterior para generar un pulso de un ciclo en cada pulsación. Finalmente, un registro de estado «pegajoso» (*sticky*) retiene ese pulso hasta que el CPU lo lee, de modo que el programa en ensamblador, que consulta los botones a una velocidad no sincronizada con la pulsación, nunca pierde ni duplica un evento.
 
 ### 4.10 Protocolo UART asíncrono
 
-<!-- Sugerencia: trama, baud rate, ciclos de reloj por bit y muestreo del receptor. -->
+La UART transmite bytes de forma asíncrona sin línea de reloj: la línea está en alto en reposo, un bit de inicio (0) marca el comienzo, siguen los 8 bits de datos (LSB primero) y un bit de parada (1) cierra la trama. Ambos extremos deben usar la misma velocidad. A 115 200 baudios y con `clk_i` = 100 MHz, un bit dura `100 000 000 / 115 200 ≈ 868,06`, es decir, 868 ciclos (error de 0,007 %); una trama de 10 bits dura ≈ 86,8 µs, o sea ≈ 11 520 bytes/s. El receptor detecta el flanco de bajada del bit de inicio, espera medio bit para situarse en el centro del bit y muestrea cada bit en su mitad, lo que lo hace tolerante a pequeñas diferencias de frecuencia. El bit de parada se verifica y, si es inválido, se levanta `RX_FRAME_ERROR`.
 
 ### 4.11 Programación en ensamblador RISC-V
 
-<!-- Sugerencia: convención de llamado, uso de registros y de la pila, pseudoinstrucciones
-y proceso para cargar el programa en la ROM. -->
+Un programa en ensamblador RISC-V se escribe con las instrucciones de la Tabla 3.4 y con pseudoinstrucciones que el ensamblador expande. La convención de llamado estándar usa `ra` (x1) para la dirección de retorno, `sp` (x2) para la pila, `a0`–`a7` para argumentos y retornos y `t0`–`t6`/`s0`–`s11` para temporales y registros guardados. En este proyecto el programa es **monolítico y sin pila**: no usa llamadas anidadas profundas y, para poder invocar subrutinas desde otras que ya usan `ra`, emplea `t5` y `t6` como registros de retorno alternativos (`jal t6, rutina` … `jalr zero, 0(t6)`). Los registros `s0`, `s1` y `s2` almacenan de forma permanente las bases de RAM (`0x2000`), MMIO (`0x10000`) y VGA (`0x11000`), de manera que cada variable o periférico se accede con un desplazamiento inmediato.
+
+El programa se ensambla con `riscv64-unknown-elf-as -march=rv32i -mabi=ilp32`, se enlaza con `link.ld`, se convierte a binario con `objcopy` y se transforma en un archivo `game.hex` de 2048 palabras (rellenando con `nop`, `0x00000013`) que la ROM carga con `$readmemh`. El script `cpu/scripts/build_firmware.sh` verifica que la imagen no exceda 8192 bytes.
 
 ### 4.12 Reglas del juego de Batalla Naval
 
-<!-- Sugerencia: colocación, disparo, impacto, fallo y hundido, condición de victoria y
-por qué la información oculta debe permanecer dentro del procesador. -->
+Cada jugador coloca tres barcos de longitudes 4, 3 y 2, horizontales o verticales, dentro de su tablero de 8×8 y sin traslaparse. Por turnos, cada jugador elige una casilla del tablero rival y recibe como respuesta **fallo** (agua), **impacto** (parte de un barco) o **hundido** (el impacto completó el último segmento de un barco). Repetir un disparo sobre la misma casilla no está permitido. Gana quien hunde primero toda la flota rival.
+
+El juego solo funciona si cada jugador desconoce la disposición del otro. Por eso la información de ambos tableros reside únicamente en la RAM del procesador: el VGA muestra al Jugador 1 su propia flota y solo los impactos y fallos sobre el tablero rival, y la FPGA solo transmite al Jugador 2 resultados de disparos (`SR`, `DR`) y nunca la posición de la flota del Jugador 1. Hacerlo cumplir en el procesador, y no en la aplicación de PC, evita que una aplicación modificada pueda hacer trampa.
 
 ---
 
@@ -473,18 +486,37 @@ por qué la información oculta debe permanecer dentro del procesador. -->
 
 ### 5.1 Diseño modular
 
-<!-- Sugerencia: referencia al planteamiento del diseño, niveles de abstracción y
-separación entre núcleo, memorias y periféricos. -->
+El diseño siguió el documento de planteamiento (`docs/diseño/planteamiento.md`), que parte de cuatro niveles de abstracción: un primer nivel con los grandes bloques (procesador, memorias, interconexión, periféricos y PC), un segundo nivel con las interfaces entre ellos, un tercer nivel con los subbloques de cada periférico y un cuarto nivel con la estructura interna de cada módulo. El núcleo, las memorias y cada periférico se definieron como bloques independientes con una interfaz estándar (Sección 3.5), de forma que cada integrante pudo diseñar y verificar su parte sin esperar a las demás: Persona 1 el procesador, las memorias y la interconexión; Persona 2 el VGA y los periféricos locales (botones, displays, LED, buzzer), el PLL y las restricciones; Persona 3 el ensamblador, el protocolo UART y la aplicación de PC. Los módulos con funciones muy relacionadas se fusionaron en un único archivo (por ejemplo `vga_memory`, que une el cálculo de dirección de tile y la memoria de doble puerto) para evitar una proliferación de módulos de pocas líneas.
 
 ### 5.2 Flujo de desarrollo y validación por etapas
 
-<!-- Sugerencia: orden real seguido, desde los bloques del núcleo hasta la integración,
-el programa del juego, la aplicación de PC y las pruebas en la tarjeta. -->
+El desarrollo se organizó en etapas, cada una con su banco de pruebas autoverificable y registrada mediante *issues* y ramas de Git:
+
+1. **Núcleo y memorias**: bloques de datapath (`tb_stage3`, `tb_stage4`), núcleo integrado (`tb_riscv_core`, `tb_core_edges`) y subsistema con ROM/RAM (`tb_processor_subsystem`).
+2. **Interconexión MMIO**: decodificador y multiplexor de lectura (`address_decoder_tb`, `read_mux_tb`, `mmio_interconnect_tb`).
+3. **Periféricos**: UART (`baud_gen_tb`, `uart_tx_tb`, `uart_rx_tb`, `uart_loopback_tb`, `uart_peripheral_tb`), VGA (`vga_timing_tb`, `vga_memory_tb`, `vga_color_rgb_tb`), entradas, displays, LED y buzzer, y el conjunto de periféricos locales (`perifericos_locales_tb`).
+4. **Integración**: `sistema_top` con el procesador, la interconexión y todos los periféricos, probado con `sistema_top_tb` y el programa de diagnóstico `handoff.hex`.
+5. **Programa del juego**: `game.S` se verifica con `game_firmware_tb`, que ejecuta el firmware real en el sistema completo y reproduce una partida (colocaciones válidas e inválidas, disparos, hundimientos, victorias y reinicio).
+6. **Aplicación de PC**: pruebas unitarias en Python (`unittest`) del protocolo, el estado y el enlace serial, más pruebas de flujo de partida.
+7. **Restricciones y tarjeta**: asignación de pines y restricciones de reloj en `constraints/nexys4.xdc`, síntesis, implementación y pruebas en la Nexys 4.
+
+<!-- PENDIENTE: indicar el orden/fechas reales de las etapas 7 (síntesis, implementación, prueba física) cuando se completen -->
 
 ### 5.3 Herramientas
 
-<!-- Sugerencia: lista con versiones reales (síntesis e implementación, simulación,
-HDL, ensamblador, aplicación de PC, tarjeta de desarrollo). -->
+**Tabla 5.1.** Herramientas utilizadas.
+
+| Función | Herramienta |
+|---|---|
+| Síntesis, implementación, IP de reloj y bitstream | Xilinx Vivado (Clocking Wizard para `clk_wiz_pixel`) <!-- PENDIENTE: versión exacta de Vivado --> |
+| Lenguaje de descripción de hardware | SystemVerilog (IEEE 1800-2012) |
+| Simulación de los testbenches | Icarus Verilog 12.0 (`iverilog -g2012` y `vvp`) |
+| Ensamblador y enlazador | Toolchain `riscv64-unknown-elf` (`as`, `ld`, `objcopy`, `objdump`) con `-march=rv32i -mabi=ilp32` |
+| Generación de la imagen de ROM | Script `cpu/scripts/build_firmware.sh` (o `.ps1`) |
+| Aplicación de PC | Python 3, Tkinter y pyserial |
+| Pruebas de la aplicación de PC | `unittest` de la biblioteca estándar |
+| Control de versiones | Git y GitHub (ramas por integrante e *issues*) |
+| Tarjeta de desarrollo | Digilent Nexys 4 Rev. B (Artix-7 XC7A100T), monitor VGA y cable USB |
 
 ---
 
@@ -492,18 +524,60 @@ HDL, ensamblador, aplicación de PC, tarjeta de desarrollo). -->
 
 ### 6.1 Jerarquía de módulos
 
-<!-- Sugerencia: árbol de módulos tomado del código fuente final, en un bloque de código,
-y nota sobre cualquier diferencia respecto al planteamiento. -->
+La jerarquía real extraída del código fuente es la siguiente (nombres de instancia entre paréntesis):
+
+```text
+sistema_top
+├── processor_subsystem (u_processor)
+│   ├── riscv_core (core)
+│   │   ├── pc_register, pc_plus4
+│   │   ├── instruction_decoder, control_unit
+│   │   ├── register_file, immediate_generator
+│   │   ├── mux_a, mux_b, alu
+│   │   ├── branch_comparator, branch_jump_logic
+│   │   └── mux_writeback, mux_next_pc
+│   ├── program_rom
+│   └── data_ram (ram)
+├── address_decoder (u_decoder)
+├── read_mux (u_read_mux)
+├── uart_peripheral (u_uart)
+│   ├── baud_gen
+│   ├── uart_tx
+│   └── uart_rx
+├── perifericos_locales (u_locales)
+│   ├── btn_input ── button_debouncer (x7)
+│   ├── seg7_ctrl
+│   ├── led_reg
+│   └── buzzer_gen
+└── vga_periferico (u_vga)
+    ├── clk_wiz_pixel (u_pll, IP Clocking Wizard)
+    ├── vga_timing
+    ├── vga_memory
+    └── vga_color_rgb ── vga_font
+```
+
+Respecto al planteamiento, el decodificador de direcciones y el generador de habilitaciones de escritura se fusionaron en `address_decoder`; la memoria de tiles y el cálculo de dirección en `vga_memory`; y los cuatro periféricos locales se agruparon en `perifericos_locales`. Además, el registro del cursor VGA (`vga_cursor_ctrl`) y el contador `cpu_ce` residen directamente en `sistema_top`.
 
 ### 6.2 Diagramas de bloques
 
-<!-- Sugerencia: figura del sistema completo (primer y segundo nivel) con leyenda. Los
-diagramas más detallados se colocan al inicio de las secciones 7 y 8. -->
+![Figura 6.1. Diagrama de primer nivel](../diseño/diagramas/diagrama_primer_nivel.jpg)
+
+**Figura 6.1.** Diagrama de primer nivel: procesador con sus memorias, interconexión MMIO, periféricos y aplicación de PC. Se observa que el Jugador 1 interactúa con la tarjeta y el Jugador 2 solo a través de la UART.
+
+![Figura 6.2. Diagrama de segundo nivel](../diseño/diagramas/diagrama_segundo_nivel.jpg)
+
+**Figura 6.2.** Diagrama de segundo nivel con las señales entre bloques. Se observa el bus de instrucciones independiente y el bus de datos compartido por RAM y periféricos.
+
+Los diagramas de tercer nivel del procesador, la interconexión y los periféricos se presentan al inicio de las secciones 7 y 8 (`diagrama_tercer_nivel1.jpeg` y `diagrama_tercer_nivel2.jpeg`).
 
 ### 6.3 Flujo de la partida
 
-<!-- Sugerencia: descripción numerada o diagrama de flujo: inicialización, colocación
-concurrente, batalla, fin de partida y reinicio. -->
+1. **Inicialización.** Al arrancar (o al activar RST), `init_game` pone `GAME_STATE = 0` (colocación), `TURN = 1`, borra los cuatro tableros y las 300 posiciones del VGA, dibuja el título «BATALLA NAVAL», muestra el cursor sobre el tablero del J1, enciende el LED de colocación (`001`) y actualiza el marcador de victorias y las estadísticas.
+2. **Colocación concurrente.** El J1 mueve el cursor con los botones, rota con SEL y confirma con OK; cada colocación válida escribe el barco en `BOARD_J1` y en el VGA, y una inválida activa el buzzer. En paralelo, el J2 envía tramas `P` por UART que se validan y responden con `PA` o `PR`. El orden de finalización es indiferente.
+3. **Inicio de batalla.** Cuando `PLACED_J1 = 3` y `PLACED_J2 = 3` se pasa a `GAME_STATE = 1`, turno del J1, LED `010`, y se envían `B` y `T,1`.
+4. **Batalla.** El J1 dispara con OK sobre el tablero del J2 (`DR`) y el J2 con `S` por UART (`SR`). Cada disparo válido actualiza `SHOTS_*`, el VGA, el buzzer (impacto, fallo o hundido) y pasa el turno (`T,jugador`). Los disparos repetidos o fuera de turno se ignoran.
+5. **Fin de partida.** Al hundirse toda la flota de un jugador se pasa a `GAME_STATE = 2`, se incrementa su contador de victorias, se actualizan displays y VGA, el LED pasa a `100`, suena el patrón de victoria y se envía `FIN,jugador`.
+6. **Reinicio.** Con RST (SW1) en cualquier estado se vuelve a `init_game`, conservando el marcador de victorias.
 
 ---
 
