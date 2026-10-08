@@ -972,79 +972,252 @@ los periféricos. -->
 
 ### 8.1 Periférico VGA
 
+Módulo `vga_periferico`, que agrupa `clk_wiz_pixel`, `vga_timing`, `vga_memory` y `vga_color_rgb` (con `vga_font`). El diagrama de tercer nivel de los periféricos aparece en la Figura 8.1 y el de cuarto nivel de cada subbloque en las Figuras 8.2 a 8.4.
+
+![Figura 8.1. Diagrama de tercer nivel de los periféricos](../diseño/diagramas/diagrama_tercer_nivel2.jpeg)
+
+**Figura 8.1.** Diagrama de tercer nivel del periférico VGA y de los periféricos locales. Se observan los dos dominios de reloj del VGA (100 MHz para la escritura, 25 MHz para la lectura) y los cuatro bloques de periféricos locales.
+
 #### Entradas y salidas
+
+**Tabla 8.1.** Puertos de `vga_periferico`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i` | Entrada | 1 | Reloj del sistema, 100 MHz |
+| `rst_i` | Entrada | 1 | Reset síncrono activo en alto |
+| `vga_we_i` | Entrada | 1 | Escritura de un tile (ya calificada por `address_decoder`) |
+| `vga_addr_i` | Entrada | 9 | Índice del tile (0–299) |
+| `vga_wdata_i` | Entrada | 32 | Palabra de tile (Tabla 3.6) |
+| `cursor_ctrl_i` | Entrada | 8 | Registro del cursor (visible, tablero, fila, columna) |
+| `hsync_o`, `vsync_o` | Salida | 1 c/u | Sincronismos horizontal y vertical, activos en bajo |
+| `r_o`, `g_o`, `b_o` | Salida | 4 c/u | Canales de color del DAC VGA |
 
 #### Diagrama interno
 
-<!-- Sugerencia: figura con generador de temporización, memoria de tiles, generador de
-color y los dos dominios de reloj. -->
+![Figura 8.2. Temporización VGA](../diseño/diagramas/diagrama_cuarto_nivel_temporizacion_vga.png)
+
+**Figura 8.2.** Generador de temporización (`vga_timing`): contadores `hcount` y `vcount`, comparadores de sincronismo y `video_on`.
+
+![Figura 8.3. Memoria de video](../diseño/diagramas/diagrama_cuarto_nivel_memoria_video.png)
+
+**Figura 8.3.** Memoria de tiles de doble puerto (`vga_memory`): cálculo de dirección y puertos A (100 MHz) y B (25 MHz).
+
+![Figura 8.4. Generador de color](../diseño/diagramas/diagrama_cuarto_nivel_color_rgb.png)
+
+**Figura 8.4.** Generador de color y RGB (`vga_color_rgb`): decodificación del tile, texto, cuadrícula, cursor y salida de color.
 
 #### Funcionamiento
 
-<!-- Sugerencia: temporización, cálculo de la casilla, sincronización entre dominios y
-justificación de la cuadrícula elegida. -->
+**Temporización.** `vga_timing` cuenta con el reloj de píxel de 25 MHz: `hcount` recorre 0–799 y `vcount` 0–524. `hsync` se pone en bajo durante 96 ciclos tras 640 + 16 píxeles y `vsync` en bajo durante 2 líneas tras 480 + 10 líneas (Tabla 4.1). `video_on` es verdadero si `hcount < 640` y `vcount < 480`.
+
+**Cálculo de la casilla.** La columna y la fila de tile salen directamente de los bits altos de los contadores (`hcount[9:5]`, `vcount[9:5]`), y la dirección es `fila·20 + columna`. Los bits bajos (`hcount[4:0]`, `vcount[4:0]`) indican la posición del píxel dentro del tile de 32×32.
+
+**Sincronización entre dominios.** El puerto A de la memoria escribe con `clk_i`; el puerto B lee con `clk_pix` con latencia de 1 ciclo. Para alinear el dato leído con su posición, `vga_periferico` retrasa un ciclo `video_on`, el píxel dentro del tile y la columna y fila del tile. El reset del dominio de video es `rst_pix = rst_i | ~pll_locked`, de modo que la temporización no arranca hasta que el PLL está estable.
+
+**Generación de color.** `vga_color_rgb` determina, por prioridad: (1) negro fuera de la zona visible, (2) carácter si `TEXT_ENABLE = 1` (la fuente de 8×8 de `vga_font` se escala 4× para llenar el tile, con el píxel `[4:2]`), (3) negro fuera de los dos tableros (J1: columnas 1–8, J2: columnas 11–18, filas 6–13), (4) borde amarillo del cursor, (5) línea negra de cuadrícula en el primer píxel de cada casilla, y (6) el color de la casilla según la Tabla 3.7.
+
+**Justificación de la cuadrícula.** Se eligió 20×15 tiles de 32×32 porque 640 y 480 son múltiplos exactos de 32 (20 y 15), el tamaño es potencia de 2 (los cocientes y restos son simples cortes de bits) y los tableros de 8×8 caben con margen para el HUD de texto (título, marcador y estadísticas).
 
 #### Relación con el sistema
+
+El CPU solo escribe en el VGA: el decodificador genera `we_vga` y `vga_addr = (mmio_addr − 0x11000) >> 2`. El registro del cursor (`0x0001_0148`) se mantiene en `sistema_top` (`vga_cursor_ctrl`) y se conecta a `cursor_ctrl_i`. Las salidas `hsync_o`, `vsync_o`, `r_o`, `g_o` y `b_o` van directamente a los pines del conector VGA (Sección 11). La lectura del VGA por el CPU devuelve cero.
 
 ### 8.2 Periférico de entradas del Jugador 1
 
+Módulo `btn_input` (con `button_debouncer`), instanciado en `perifericos_locales`.
+
+![Figura 8.5. Condicionador de entradas](../diseño/diagramas/diagrama_cuarto_nivel_condicionador_entradas.png)
+
+**Figura 8.5.** Condicionador de entradas: sincronizador, filtro antirrebote, detector de flanco y registro de estado.
+
 #### Entradas y salidas
+
+**Tabla 8.2.** Puertos de `btn_input`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i` | Entrada | 1 | Reloj de 100 MHz |
+| `rst_i` | Entrada | 1 | Reset síncrono activo en alto |
+| `btn_raw_i` | Entrada | 7 | Botones/interruptores sin filtrar (Tabla 3.8) |
+| `ack_i` | Entrada | 1 | Lectura confirmada del registro; borra los pulsos |
+| `rdata_o` | Salida | 32 | `btn_status` (bits [6:0] válidos) |
+
+Parámetros: `CLK_FREQ_HZ = 100 000 000` y `DEBOUNCE_MS = 10`.
 
 #### Funcionamiento
 
+Un generador de habilitación (`ce_1ms`) produce un pulso cada 100 000 ciclos (1 ms). Las siete entradas pasan por un sincronizador de dos flip-flops (`btn_meta`, `btn_sync`) y por una instancia de `button_debouncer` cada una, que acepta un nuevo nivel después de 10 muestras de 1 ms estables. Un detector de flancos compara el nivel estable con el anterior y genera un pulso de un ciclo en el flanco de subida. Ese pulso se almacena en el registro de estado `btn_status`, donde permanece hasta que `ack_i` lo borra. Un mismo botón mantenido pulsado produce un solo evento.
+
 #### Relación con el sistema
+
+`rdata_o` entra a `read_mux` como `input_rdata_i`. `sistema_top` genera `input_ack_i = sel_input && cpu_ce && !mmio_we`, de manera que solo una lectura confirmada de la dirección `0x0001_0120` consume los pulsos. El firmware lee este registro una vez por iteración de `main_loop` y despacha las acciones según el estado del juego.
 
 ### 8.3 Periférico UART
 
+Módulo `uart_peripheral`, con `baud_gen`, `uart_tx` y `uart_rx`.
+
+![Figura 8.6. Registros UART](../diseño/diagramas/registros_uart.jpg)
+
+**Figura 8.6.** Registros del periférico UART (control/estado, TX y RX).
+
+![Figura 8.7. Receptor UART](../diseño/diagramas/uart_rx.jpg)
+
+**Figura 8.7.** Receptor UART y su máquina de estados.
+
 #### Entradas y salidas
+
+**Tabla 8.3.** Puertos de `uart_peripheral`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i`, `rst_i` | Entrada | 1 | Reloj de 100 MHz y reset síncrono activo en alto |
+| `write_enable_i` | Entrada | 1 | Escritura habilitada para el UART |
+| `addr_i` | Entrada | 2 | 00 STATUS, 01 TX, 10 RX |
+| `wdata_i` | Entrada | 32 | Dato de escritura |
+| `rdata_o` | Salida | 32 | Dato de lectura (STATUS o RX) |
+| `uart_rx_i` | Entrada | 1 | Línea RX desde el puente USB-UART (pin C4) |
+| `uart_tx_o` | Salida | 1 | Línea TX hacia el puente USB-UART (pin D4) |
 
 #### Funcionamiento
 
-<!-- Sugerencia: qué se reutilizó del Proyecto 2 y qué se ajustó. -->
+`baud_gen` divide 100 MHz entre 868 y emite un pulso `baud_tick_o` por bit. `uart_tx` serializa el byte escrito en TX (inicio, 8 datos LSB primero, parada) y mantiene `TX_BUSY` hasta terminar. `uart_rx` sincroniza la línea, detecta el flanco de inicio, espera medio bit y muestrea cada bit en su centro; al recibir una trama correcta genera `rx_valid`, y si el bit de parada no es 1 genera `rx_frame_error`. El periférico guarda el byte en `rx_data_r` y mantiene `RX_VALID` hasta que el CPU lo borra escribiendo 1 en el bit 1 de STATUS.
+
+Se reutilizó el UART del Proyecto 2 sin cambiar su interfaz con el CPU. Las modificaciones fueron de integración: el desplazamiento de direcciones (`addr_i = (mmio_addr − 0x10040) >> 2`), la exposición de `RX_FRAME_ERROR` en el STATUS y el uso de los parámetros `CLK_FREQ_HZ` y `BAUD_RATE` para el sistema de 100 MHz.
 
 #### Relación con el sistema
+
+El firmware consulta STATUS en `poll_uart` (bit 1) y en `uart_putc` (bit 0), y cada byte recibido alimenta la máquina de estados del protocolo (Sección 3.9). Los pines `uart_rx_i` y `uart_tx_o` se conectan al puente USB-UART de la Nexys 4, lo que permite usar la misma conexión USB para programar y para jugar.
 
 ### 8.4 Displays de 7 segmentos
 
+Módulo `seg7_ctrl`.
+
+![Figura 8.8. Controlador de displays](../diseño/diagramas/diagrama_cuarto_nivel_controlador_displays.png)
+
+**Figura 8.8.** Controlador de displays: registro de datos, selector de dígito, multiplexor, decodificador y driver de ánodos.
+
 #### Entradas y salidas
+
+**Tabla 8.4.** Puertos de `seg7_ctrl`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i`, `rst_i` | Entrada | 1 | Reloj de 100 MHz y reset |
+| `wdata_i` | Entrada | 32 | Dato BCD (bits [15:0]) |
+| `we_i` | Entrada | 1 | Escritura del registro `disp_data` |
+| `seg_o` | Salida | 7 | Segmentos `gfedcba`, activos en bajo |
+| `anode_o` | Salida | 8 | Ánodos de los 8 dígitos, activos en bajo |
+| `rdata_o` | Salida | 32 | Valor del registro `disp_data` |
 
 #### Funcionamiento
 
-<!-- Sugerencia: multiplexado, frecuencia de refresco, polaridad de las señales y formato
-del dato. -->
+El registro `disp_data[15:0]` contiene cuatro dígitos BCD: `[15:12]` decenas de victorias del J1, `[11:8]` unidades del J1, `[7:4]` decenas del J2 y `[3:0]` unidades del J2. Un contador de `DIGIT_HOLD_CYCLES = 100 000` ciclos (1 ms) selecciona cíclicamente uno de los cuatro dígitos activos; cada dígito se refresca entonces cada 4 ms (250 Hz) y no se percibe parpadeo. El dígito elegido se decodifica a siete segmentos (activos en bajo: por ejemplo `0 → 1000000`, `1 → 1111001`, `8 → 0000000`) y se activa su ánodo en bajo; los ánodos AN4–AN7 permanecen apagados. El punto decimal `dp_o` se mantiene en 1 (apagado).
 
 #### Relación con el sistema
+
+Se escribe en `0x0001_0130` desde `update_display` del firmware, que convierte cada contador de victorias a dos dígitos decimales (módulo 100). `rdata_o` regresa a `read_mux`. Las salidas `seg_o` y `anode_o` van a los pines del display de la Nexys 4 (Sección 11). `seg7_ctrl.sv` emite una advertencia de simulación (`unique case` sin cubrir todos los valores de 4 bits) porque los códigos 10–15 no son BCD válidos.
 
 ### 8.5 LED de estado
 
+Módulo `led_reg`.
+
+![Figura 8.9. Registro del LED](../diseño/diagramas/diagrama_cuarto_nivel_registro_led.png)
+
+**Figura 8.9.** Registro del LED de estado.
+
 #### Entradas y salidas
+
+**Tabla 8.5.** Puertos de `led_reg`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i`, `rst_i` | Entrada | 1 | Reloj y reset (el reset pone `led_o` en 0) |
+| `wdata_i` | Entrada | 32 | Se usan los bits [2:0] |
+| `we_i` | Entrada | 1 | Escritura del registro |
+| `led_o` | Salida | 3 | LED0–LED2 |
+| `rdata_o` | Salida | 32 | `{29'b0, led_o}` |
 
 #### Funcionamiento
 
-<!-- Sugerencia: tabla de codificación del LED por fase del juego. -->
+Es un registro de 3 bits cuya salida va directamente a los LED. **Tabla 8.6.** Codificación utilizada por el firmware.
+
+| Fase | `led_o[2:0]` | Constante de `game.S` |
+|---|---|---|
+| Colocación de barcos | `001` | `LED_PLACEMENT` |
+| Batalla | `010` | `LED_BATTLE` |
+| Partida terminada | `100` | `LED_FINISHED` |
 
 #### Relación con el sistema
+
+Se escribe en `0x0001_0138` al iniciar la partida, al comenzar la batalla y al terminar. No tiene otra lógica ni interviene en el flujo del programa.
 
 ### 8.6 Buzzer
 
+Módulo `buzzer_gen`.
+
+![Figura 8.10. Generador del buzzer](../diseño/diagramas/diagrama_cuarto_nivel_generador_buzzer.png)
+
+**Figura 8.10.** Generador de sonidos del buzzer.
+
 #### Entradas y salidas
+
+**Tabla 8.7.** Puertos de `buzzer_gen`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_i`, `rst_i` | Entrada | 1 | Reloj de 100 MHz y reset |
+| `wdata_i` | Entrada | 32 | `[2:0]` evento, `[3]` inicio |
+| `we_i` | Entrada | 1 | Escritura del registro de control |
+| `buzz_pwm_o` | Salida | 1 | Nivel alto = buzzer sonando |
+| `rdata_o` | Salida | 32 | `{28'b0, ocupado, tone_sel[2:0]}` |
 
 #### Funcionamiento
 
-<!-- Sugerencia: tabla de eventos y su patrón sonoro (frecuencia y duración) y quién
-controla la duración. -->
+El buzzer de la tarjeta es **activo de corriente continua**: suena a su frecuencia propia cuando se le aplica un nivel alto, por lo que no se generan tonos de distinta frecuencia. Cada evento se distingue por un patrón de pitidos (cantidad y duración) generado por una máquina de estados que alterna los estados de encendido y apagado y cuenta milisegundos. Una escritura con `wdata_i[3] = 1` inicia el patrón y una nueva orden interrumpe y reinicia el patrón en curso. El CPU solo escribe el evento; la duración la controla el hardware, por lo que el programa no se bloquea.
+
+**Tabla 8.8.** Eventos del buzzer.
+
+| `wdata[2:0]` | Evento | Patrón | Valor escrito por `game.S` |
+|---|---|---|---|
+| `000` | Impacto | 1 pitido de 150 ms | `0x08` (8) |
+| `001` | Fallo | 2 pitidos de 100 ms (120 ms de pausa) | `0x09` (9) |
+| `010` | Barco hundido | 3 pitidos de 120 ms (100 ms de pausa) | `0x0A` (10) |
+| `011` | Colocación inválida | 1 pitido de 400 ms | `0x0B` (11) |
+| `100` | Victoria | 5 pitidos de 150 ms (80 ms de pausa) | `0x0C` (12) |
 
 #### Relación con el sistema
+
+Se escribe en `0x0001_0140` desde las rutinas de disparo (J1 y J2), de colocación inválida y de victoria. La salida `buzz_pwm_o` va al pin JA1 (B13) del PMOD. `rdata_o` permite al programa saber si hay un patrón en curso, aunque el firmware actual no lo consulta.
 
 ### 8.7 Generación de relojes
 
+Módulo `clk_wiz_pixel` (IP Clocking Wizard, `rtl/vga/ip/clk_wiz_pixel/clk_wiz_pixel.xci`).
+
+![Figura 8.11. PLL](../diseño/diagramas/diagrama_cuarto_nivel_pll.png)
+
+**Figura 8.11.** Generación del reloj de píxel con PLL.
+
 #### Entradas y salidas
+
+**Tabla 8.9.** Puertos de `clk_wiz_pixel`.
+
+| Señal | Dirección | Ancho | Descripción |
+|---|---|---|---|
+| `clk_in1` | Entrada | 1 | Reloj de 100 MHz de la tarjeta |
+| `reset` | Entrada | 1 | Reset del PLL (`rst_i`) |
+| `clk_out1` | Salida | 1 | Reloj de píxel de 25 MHz |
+| `locked` | Salida | 1 | 1 cuando el reloj de salida es estable |
 
 #### Funcionamiento
 
-<!-- Sugerencia: relojes generados, señal de bloqueo del PLL y su uso en el reset. -->
+El sistema utiliza dos relojes: `clk_i` de 100 MHz, que viene del oscilador de la tarjeta (pin E3) y gobierna el procesador (mediante `cpu_ce`), las memorias y todos los periféricos, y `clk_pix` de 25 MHz, generado por el PLL a partir de `clk_i` y utilizado solo en el dominio de video (`vga_timing`, lectura de `vga_memory`, retardos y generación de color). La señal `locked` se combina con el reset: `rst_pix = rst_i | ~pll_locked` mantiene el dominio de video en reset hasta que el reloj es estable. El reloj de píxel de 25 MHz es exactamente `100 MHz / 4`; la frecuencia nominal VGA es 25,175 MHz y la diferencia (0,7 %) es aceptada por los monitores.
 
 #### Relación con el sistema
+
+`vga_periferico` instancia el PLL y distribuye `clk_pix` internamente. Para las simulaciones (que no incluyen la IP de Vivado) se usa un modelo de comportamiento de `clk_wiz_pixel` con período de 40 ns y `locked` activado tras un retardo. El archivo de restricciones declara el reloj de 100 MHz; Vivado deriva automáticamente el reloj generado de 25 MHz.
+
+<!-- PENDIENTE: confirmar en el reporte de Vivado la frecuencia real de clk_out1 y el uso de MMCM/PLL -->
 
 ---
 
