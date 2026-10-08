@@ -1615,25 +1615,6 @@ La coordinación se resuelve con un único lazo de sondeo: en cada vuelta se ati
 ### 13.5 Análisis de síntesis, timing y recursos
 
 <!-- PENDIENTE: a partir de los reportes de la sección 12.3, analizar el margen de timing (WNS/WHS) del reloj de 100 MHz y del de 25 MHz, los módulos que más consumen (se espera que la RAM y la memoria de tiles se mapeen a BRAM o a LUTRAM distribuida, el banco de registros a LUTRAM y `vga_font` a LUT) y la escalabilidad (por ejemplo, un tablero mayor aumentaría la memoria de tiles y el costo de los recorridos de hundimiento). -->
-
-### 13.6 Problemas y soluciones
-
-**Tabla 13.1.** Problemas encontrados en la revisión y su tratamiento.
-
-| Problema | Causa probable | Diagnóstico | Solución aplicada o recomendada |
-|---|---|---|---|
-| Los testbenches del procesador (`tb_stage3`, `tb_riscv_core`, `tb_core_edges`, `tb_processor_subsystem`) no compilan | Se agregó `ce_i` al núcleo (`fix/cpu-timing-enable`) sin actualizar los bancos | Error `Wildcard named port connection … ce_i` | Recomendado: declarar `logic ce_i = 1` en los tb. Con esa adaptación los cuatro pasan (Tabla 12.1) |
-| `game_firmware_tb` reporta 42 `ERROR VGA` aunque las 30 etapas lógicas pasan | El tb usa `VGA_BOARD_OFFSET = 61` (tableros desde la fila 3) y espera ceros en el HUD, pero el firmware con HUD usa 121 (fila 6) y escribe texto en las filas 0, 2 y 4 | Los índices con error coinciden con los tiles del HUD (80–92) y con las posiciones antiguas (61, 71, 75…) | Recomendado: actualizar `VGA_BOARD_OFFSET` a 121, los tiles del tablero rival a +10 y excluir las filas del HUD de la verificación de «inicio vacío» |
-| `sistema_top.sv` no compila en Icarus (`reg input_rdata cannot be driven`) | Una señal `logic` conducida por la salida de una instancia | Mensaje del compilador | Solo afecta a Icarus (Vivado lo acepta); para simular se usó una copia con `wire` |
-| La IP `clk_wiz_pixel` no se puede simular con Icarus | La IP de Vivado no es un modelo SystemVerilog del repositorio | Módulo indefinido | Para la simulación en Icarus se usó un modelo de comportamiento; la simulación del sistema debe repetirse con xsim |
-| `sistema_top_tb` declara `anode_o` de 4 bits | El top pasó de 4 a 8 ánodos | Advertencia de relleno de puerto | Recomendado: declarar `anode_o` de 8 bits |
-| Advertencia `unique case` en `seg7_ctrl` | Los códigos BCD 10–15 no están cubiertos | Advertencia al inicio de cada simulación | Inofensiva en uso normal (el firmware solo escribe 0–9); recomendado agregar `default` |
-| Solo hay cinco pulsadores libres para siete controles | La Nexys 4 tiene 5 pulsadores y el sexto es CPU RESET | Revisión del manual y del archivo `.xdc` | SEL en SW0 y RST del juego en SW1 |
-| Ruta del camino crítico del procesador de ciclo único | Lectura combinacional de ROM/RAM, ALU y multiplexor MMIO en un ciclo | Análisis de diseño | `cpu_ce` cada 4 ciclos y *multicycle path* en el XDC |
-| Lectura de un registro con efecto secundario (entradas) | `mmio_sel` depende solo de la dirección, no de la lectura | Nota de diseño de la Sección 7.7 | `input_ack_i = sel_input && cpu_ce && !mmio_we` |
-
-<!-- PENDIENTE: agregar los problemas observados durante la síntesis, la implementación y las pruebas en la tarjeta (timing, parpadeo VGA, ruido del buzzer, rebotes, etc.) -->
-
 ---
 
 ## 14. Conclusiones
