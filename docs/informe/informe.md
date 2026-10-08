@@ -1083,7 +1083,9 @@ Módulo `uart_peripheral`, con `baud_gen`, `uart_tx` y `uart_rx`.
 
 `baud_gen` divide 100 MHz entre 868 y emite un pulso `baud_tick_o` por bit. `uart_tx` serializa el byte escrito en TX (inicio, 8 datos LSB primero, parada) y mantiene `TX_BUSY` hasta terminar. `uart_rx` sincroniza la línea, detecta el flanco de inicio, espera medio bit y muestrea cada bit en su centro; al recibir una trama correcta genera `rx_valid`, y si el bit de parada no es 1 genera `rx_frame_error`. El periférico guarda el byte en `rx_data_r` y mantiene `RX_VALID` hasta que el CPU lo borra escribiendo 1 en el bit 1 de STATUS.
 
-Se reutilizó el UART del Proyecto 2 sin cambiar su interfaz con el CPU. Las modificaciones fueron de integración: el desplazamiento de direcciones (`addr_i = (mmio_addr − 0x10040) >> 2`), la exposición de `RX_FRAME_ERROR` en el STATUS y el uso de los parámetros `CLK_FREQ_HZ` y `BAUD_RATE` para el sistema de 100 MHz.
+Se reutilizó el periférico UART del Proyecto 2 con su interfaz de registros (STATUS, TX, RX). En el sistema final se integra mediante el desplazamiento de direcciones `addr_i = (mmio_addr − 0x10040) >> 2` y se parametriza con `CLK_FREQ_HZ = 100 MHz` y `BAUD_RATE = 115 200`.
+
+<!-- PENDIENTE: indicar con precisión qué cambios se hicieron respecto al módulo del Proyecto 2 (comparar con ese repositorio) -->
 
 #### Relación con el sistema
 
@@ -1215,7 +1217,7 @@ El sistema utiliza dos relojes: `clk_i` de 100 MHz, que viene del oscilador de l
 
 #### Relación con el sistema
 
-`vga_periferico` instancia el PLL y distribuye `clk_pix` internamente. Para las simulaciones (que no incluyen la IP de Vivado) se usa un modelo de comportamiento de `clk_wiz_pixel` con período de 40 ns y `locked` activado tras un retardo. El archivo de restricciones declara el reloj de 100 MHz; Vivado deriva automáticamente el reloj generado de 25 MHz.
+`vga_periferico` instancia el PLL y distribuye `clk_pix` internamente. Los testbenches de los subbloques VGA (`vga_timing_tb`, `vga_memory_tb`, `vga_color_rgb_tb`) no incluyen el PLL. Para simular el sistema completo con Icarus Verilog, que no dispone de la IP de Vivado, se utilizó un modelo de comportamiento de `clk_wiz_pixel` (período de 40 ns y `locked` activado tras un retardo) que no forma parte del repositorio. El archivo de restricciones declara el reloj de 100 MHz; Vivado deriva automáticamente el reloj generado de 25 MHz.
 
 <!-- PENDIENTE: confirmar en el reporte de Vivado la frecuencia real de clk_out1 y el uso de MMCM/PLL -->
 
