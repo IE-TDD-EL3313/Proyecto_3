@@ -57,17 +57,45 @@ Cada jugador cuenta con un tablero propio de 8×8 casillas y coloca una flota de
 
 ### 1.2 Solución desarrollada
 
-<!-- Sugerencia: resumen de alto nivel de la arquitectura implementada, con el nombre
-real del módulo top-level. Listar en viñetas los bloques principales (núcleo,
-ROM/RAM, interconexión MMIO, VGA, entradas, UART, displays/LED/buzzer, relojes,
-programa en ensamblador, aplicación de PC), una línea por bloque, y explicar qué
-reside en hardware y qué en software. -->
+La solución es un sistema completo sobre la tarjeta Nexys 4 Rev. B cuyo módulo de nivel superior es `sistema_top`. Dicho módulo instancia el procesador (`processor_subsystem`), la interconexión de periféricos (`address_decoder` y `read_mux`), el periférico VGA (`vga_periferico`), el periférico UART (`uart_peripheral`) y el agrupador de periféricos locales (`perifericos_locales`). Además genera internamente la habilitación de reloj del procesador (`cpu_ce`) y el reset global a partir del botón CPU RESET.
+
+Los bloques principales son:
+
+- **Núcleo RISC-V (`riscv_core`)**: procesador de 32 bits, subconjunto rv32i (29 instrucciones), con buses de instrucciones y de datos independientes.
+- **Memorias (`program_rom`, `data_ram`)**: ROM de 8 KiB cargada desde `game.hex` y RAM de 4 KiB para las variables y tableros del juego.
+- **Interconexión MMIO (`address_decoder`, `read_mux`)**: selecciona el periférico accedido, genera su habilitación de escritura y multiplexa el dato de lectura de regreso al núcleo.
+- **Periférico VGA (`vga_periferico`)**: video 640×480@60 Hz con mapa de 20×15 tiles de 32×32 píxeles, memoria de doble puerto con dos relojes (100 MHz y 25 MHz), generador de color con fuente de texto y cursor superpuesto, y reloj de píxel generado por un PLL (`clk_wiz_pixel`).
+- **Entradas del Jugador 1 (`btn_input`)**: sincronización, antirrebote (`button_debouncer`), detección de flanco y registro de estado de pulsos.
+- **UART (`uart_peripheral`, `baud_gen`, `uart_tx`, `uart_rx`)**: periférico reutilizado del Proyecto 2, a 115 200 baudios 8N1.
+- **Indicadores locales (`seg7_ctrl`, `led_reg`, `buzzer_gen`)**: marcador de victorias en displays de 7 segmentos, LED de fase y buzzer con cinco patrones sonoros.
+- **Programa en ensamblador (`game.S`)**: toda la lógica del juego (colocación, turnos, validación, hundimiento, victoria, reinicio, actualización del VGA y de los indicadores).
+- **Aplicación de PC (`pc/src/player2.py`)**: terminal remota del Jugador 2 en Python con Tkinter y pyserial.
+
+En hardware residen el procesador, las memorias y los periféricos, que únicamente exponen registros de entrada/salida. En software (ensamblador) reside absolutamente toda la lógica del juego, y la aplicación de PC no contiene reglas de juego: solo valida el formato de las tramas, las transmite y muestra lo que la FPGA confirma.
+
+<!-- PENDIENTE: confirmar el nombre final del top-level utilizado en Vivado (se asume `sistema_top`) -->
 
 ### 1.3 Alcance y limitaciones
 
-<!-- Sugerencia: redactar en prosa al final del proyecto. Indicar el alcance real
-logrado, las decisiones que se apartaron del planteamiento (documentadas como
-decisiones, no como errores) y las limitaciones conocidas. -->
+Se implementó el sistema completo descrito en el planteamiento: procesador rv32i con 29 instrucciones, memorias separadas, interconexión MMIO, periféricos VGA, entradas, UART, displays, LED y buzzer, programa de juego en ensamblador y aplicación de PC. El código fuente fue verificado mediante testbenches autoverificables en Icarus Verilog (sección 12.1), incluyendo una simulación de partida completa con el firmware real (`game_firmware_tb`).
+
+Durante la implementación se tomaron las siguientes decisiones que se apartan del planteamiento original, y que se documentan como decisiones de diseño:
+
+- **Procesador con habilitación de reloj (`cpu_ce`)**: el núcleo sigue siendo de ciclo único, pero en el sistema final confirma una instrucción cada 4 ciclos de `clk_i` (25 MIPS máximos) para relajar el camino crítico a 100 MHz. El archivo de restricciones declara las rutas del PC y del banco de registros como *multicycle path* (setup 4, hold 3).
+- **Registro adicional de control del cursor VGA** en `0x0001_0148`, no previsto en el planteamiento, que superpone el cursor sobre la casilla seleccionada sin modificar la memoria de tiles.
+- **Texto en el VGA**: se añadió la capacidad de mostrar caracteres (título, marcador y estadísticas) mediante el bit 11 de la palabra de tile y una fuente de 8×8.
+- **Buzzer**: en lugar de generar tonos de distintas frecuencias, se utiliza un buzzer activo de corriente continua y cada evento se distingue por un patrón de pitidos (cantidad y duración) generado por una máquina de estados.
+- **Mapeo de botones**: la tarjeta solo dispone de cinco pulsadores libres además del CPU RESET, por lo que los siete controles lógicos se asignaron a cuatro pulsadores de navegación, BTNC (OK) y dos interruptores (SW0 = SEL, SW1 = reinicio de la partida).
+- **Marcador de victorias** que se conserva al reiniciar la partida con BTN_RST (los contadores solo se ponen en cero al arrancar el sistema).
+
+Limitaciones conocidas:
+
+- La verificación física en la tarjeta, los reportes de utilización y timing de Vivado y la simulación post-implementación temporizada no están incluidos en esta versión del informe (secciones 12.2 y 12.3).
+- Los testbenches del procesador en `cpu/tb` no instancian el puerto `ce_i` agregado posteriormente al núcleo; para ejecutarlos se les debe fijar `ce_i = 1`.
+- `sistema_top_tb.sv` declara `anode_o` de 4 bits mientras que el top final lo expone de 8 bits (solo genera una advertencia de relleno).
+- El UART no aplica control de flujo: el Jugador 2 debe esperar la respuesta de la FPGA antes de enviar la siguiente trama.
+
+<!-- PENDIENTE: completar con las limitaciones observadas en la prueba física (parpadeo del VGA, ruido del buzzer, pérdida de tramas, etc.) -->
 
 ---
 
@@ -96,76 +124,282 @@ Diseñar e implementar, sobre una FPGA, un microprocesador RISC-V de 32 bits (su
 
 ### 3.1 Requisitos funcionales
 
-<!-- Sugerencia: tabla con tres columnas (Requisito | Valor especificado | Implementación
-final). Incluir tablero, flota, orientación, estados de casilla, condición de victoria,
-colocación concurrente, disparo repetido, procesador, memorias, relojes, video,
-entradas, UART, displays, LED, buzzer y comportamiento de BTN_RST. Completar la
-tercera columna con los valores reales del diseño final. -->
+**Tabla 3.1.** Requisitos funcionales y su implementación final.
+
+| Requisito | Valor especificado | Implementación final |
+|---|---|---|
+| Tablero | 8×8 casillas por jugador | `BOARD_J1`/`BOARD_J2` de 64 palabras cada uno en RAM |
+| Flota | 3 barcos de 4, 3 y 2 casillas | Identificadores 0, 1 y 2; longitud = 4 − id |
+| Orientación | Horizontal o vertical | `ORIENTATION` (0 = H, 1 = V) para J1; campo `H`/`V` en la trama `P` para J2 |
+| Estados de casilla | Agua, barco, impacto, fallo | `CELL_WATER=0`, `CELL_SHIP=1`, `CELL_HIT=2`, `CELL_MISS=3` |
+| Barco hundido | Todas sus casillas impactadas | `check_ship_sunk_j1` / `check_ship_sunk_j2` |
+| Condición de victoria | Hundir toda la flota rival | `check_win_j1` / `check_win_j2`; se envía `FIN,jugador` |
+| Colocación concurrente | Ambos jugadores colocan a la vez | J1 con botones y J2 por UART; la batalla inicia cuando `PLACED_J1` y `PLACED_J2` valen 3 |
+| Colocación inválida | Se rechaza (fuera de tablero, traslape) | J1: buzzer de colocación inválida; J2: `PR,barco,F` o `PR,barco,O` |
+| Disparo repetido | No permitido | Se ignora y el turno no cambia |
+| Procesador | RISC-V rv32i | 29 instrucciones, `riscv_core` de ciclo único con `cpu_ce` cada 4 ciclos |
+| Memorias | ROM y RAM con buses independientes | ROM 8 KiB (2048 palabras), RAM 4 KiB (1024 palabras) |
+| Relojes | 100 MHz y 25 MHz (píxel) | `clk_i` de la tarjeta y `clk_wiz_pixel` (PLL) para el VGA |
+| Video | VGA 640×480@60 Hz, mapa de tiles | 20×15 tiles de 32×32 px, 12 bits de color (4 por canal) |
+| Entradas J1 | Arriba, abajo, izquierda, derecha, SEL, OK, RST con antirrebote | `btn_input`, antirrebote de 10 ms, registro de pulsos en `0x0001_0120` |
+| UART | Canal único del Jugador 2 | 115 200 baudios, 8N1, ASCII terminado en `\n` |
+| Displays | Marcador de victorias | 4 dígitos BCD en `0x0001_0130`, multiplexados |
+| LED | Fase del juego | `led_o[2:0]`: 001 colocación, 010 batalla, 100 fin |
+| Buzzer | Sonido por evento | 5 patrones de pitidos en `0x0001_0140` |
+| BTN_RST | Reinicia la partida | `init_game` limpia tableros, VGA y estado; conserva las victorias |
 
 ### 3.2 Mapa de memoria
 
-<!-- Sugerencia: tabla con las regiones (ROM, RAM, periféricos, memoria de video), su
-rango de direcciones y contenido, más una figura del mapa con leyenda. -->
+**Tabla 3.2.** Mapa de memoria del sistema (direcciones de byte; el núcleo solo accede a palabras alineadas).
+
+| Región | Rango de direcciones | Contenido |
+|---|---|---|
+| ROM de instrucciones | `0x0000_0000` – `0x0000_1FFF` | Programa `game.hex` (bus de instrucciones independiente) |
+| RAM de datos | `0x0000_2000` – `0x0000_2FFF` | Variables de juego, tableros y estado del parser UART |
+| Periféricos MMIO | `0x0001_0000` – `0x0001_0FFF` | UART, entradas, display, LED, buzzer y control del cursor |
+| Memoria de video VGA | `0x0001_1000` – `0x0001_14AF` (decodificador: hasta `0x0001_17FF`) | 300 palabras de tile (20×15) |
+
+Los accesos fuera de estos rangos devuelven cero al leer y se ignoran al escribir. La ROM solo es accesible por el bus de instrucciones. La figura siguiente resume el mapa.
+
+```text
+0x0000_0000  ┌──────────────────┐
+             │ ROM (8 KiB)      │  bus de instrucciones
+0x0000_1FFF  └──────────────────┘
+0x0000_2000  ┌──────────────────┐
+             │ RAM (4 KiB)      │  bus de datos
+0x0000_2FFF  └──────────────────┘
+0x0001_0040  ┌──────────────────┐
+             │ UART (3 reg.)    │
+0x0001_0120  │ Entradas J1      │
+0x0001_0130  │ Display 7 seg.   │
+0x0001_0138  │ LED              │
+0x0001_0140  │ Buzzer           │
+0x0001_0148  │ Cursor VGA       │
+             ├──────────────────┤
+0x0001_1000  │ Memoria VGA      │
+0x0001_14AF  └──────────────────┘
+```
+
+**Figura 3.1.** Mapa de memoria. Se observa que RAM y periféricos comparten el bus de datos y se separan solo por dirección.
 
 ### 3.3 Direcciones de periféricos
 
-<!-- Sugerencia: tabla (Periférico | Registro | Offset | Dirección). Verificar que
-coincide con las constantes del ensamblador y con el decodificador de direcciones. -->
+**Tabla 3.3.** Registros de los periféricos (coinciden con las constantes `.equ` de `game.S` y con `address_decoder`).
+
+| Periférico | Registro | Offset | Dirección | Acceso |
+|---|---|---|---|---|
+| UART | STATUS | `0x040` | `0x0001_0040` | Lectura / escritura (limpia RX_VALID) |
+| UART | TX | `0x044` | `0x0001_0044` | Escritura |
+| UART | RX | `0x048` | `0x0001_0048` | Lectura |
+| Entradas J1 | `btn_status` | `0x120` | `0x0001_0120` | Solo lectura |
+| Display 7 seg. | `disp_data` | `0x130` | `0x0001_0130` | Escritura / lectura |
+| LED | `led_status` | `0x138` | `0x0001_0138` | Escritura / lectura |
+| Buzzer | control | `0x140` | `0x0001_0140` | Escritura / lectura |
+| Cursor VGA | `vga_cursor_ctrl` | `0x148` | `0x0001_0148` | Escritura |
+| Memoria VGA | tile *n* | `0x1000 + 4n` | `0x0001_1000 + 4n` | Escritura |
+
+Las constantes de `game.S` son `UART_STATUS`, `UART_TX`, `UART_RX`, `INPUT`, `DISPLAY`, `LED`, `BUZZER` y `VGA_BASE`; el cursor se escribe con el desplazamiento `0x148` respecto a la base MMIO. El planteamiento original no listaba el registro del cursor.
 
 ### 3.4 Conjunto de instrucciones soportado
 
-<!-- Sugerencia: tabla de las instrucciones realmente implementadas, agrupadas por
-formato (R, I, S, B, J), con opcode/funct. Indicar cualquier instrucción adicional. -->
+**Tabla 3.4.** Instrucciones implementadas (29), agrupadas por formato.
+
+| Formato | Instrucciones | opcode | funct3 / funct7 |
+|---|---|---|---|
+| R | ADD, SUB | `0110011` | 000 / 0000000, 0100000 |
+| R | SLL, SLT, SLTU | `0110011` | 001, 010, 011 / 0000000 |
+| R | XOR, OR, AND | `0110011` | 100, 110, 111 / 0000000 |
+| R | SRL, SRA | `0110011` | 101 / 0000000, 0100000 |
+| I (aritmética) | ADDI, SLTI, SLTIU, XORI, ORI, ANDI | `0010011` | 000, 010, 011, 100, 110, 111 |
+| I (desplazamiento) | SLLI, SRLI, SRAI | `0010011` | 001, 101, 101 / 0000000, 0000000, 0100000 |
+| I (carga) | LW | `0000011` | 010 |
+| I (salto) | JALR | `1100111` | 000 |
+| S | SW | `0100011` | 010 |
+| B | BEQ, BNE, BLT, BGE | `1100011` | 000, 001, 100, 101 |
+| U | LUI | `0110111` | — |
+| U | AUIPC | `0010111` | — |
+| J | JAL | `1101111` | — |
+
+No se implementan cargas/almacenamientos de byte o media palabra, BLTU/BGEU, FENCE, ECALL/EBREAK ni extensiones; no existen interrupciones ni excepciones. El programa `game.S` se ensambla con `-march=rv32i` y solo utiliza este subconjunto.
 
 ### 3.5 Interfaz estándar de periféricos
 
-<!-- Sugerencia: tabla de señales (nombre, ancho, dirección, descripción) de la interfaz
-común. Indicar cómo se decodifican los periféricos de una palabra y de varios
-registros, la excepción del VGA, y si el reset es síncrono o asíncrono. -->
+**Tabla 3.5.** Señales de la interfaz común de periféricos.
+
+| Señal | Ancho | Dirección | Descripción |
+|---|---|---|---|
+| `clk_i` | 1 | Entrada | Reloj del sistema (100 MHz) |
+| `rst_i` | 1 | Entrada | Reset síncrono activo en alto |
+| `we_i` / `write_enable_i` | 1 | Entrada | Escritura, ya calificada por la selección del periférico |
+| `addr_i` | 2 | Entrada | Selección de registro (solo UART, que tiene tres registros) |
+| `wdata_i` | 32 | Entrada | Dato de escritura |
+| `rdata_o` | 32 | Salida | Dato de lectura, enviado a `read_mux` |
+
+Los periféricos de una sola palabra (entradas, display, LED, buzzer) no reciben `addr_i`: el decodificador genera una señal `we_X` dedicada para cada uno. El UART recibe `addr_i = (mmio_addr − 0x10040) >> 2`. El VGA es la excepción: recibe una dirección de tile de 9 bits `vga_addr_i = (mmio_addr − 0x11000) >> 2` y no devuelve datos (la memoria es de solo escritura para el CPU, `rdata` fijo en cero). El reset interno `rst_i` se deriva de `rst_ni` (botón activo en bajo) invertido, y todos los registros lo aplican de forma síncrona.
 
 ### 3.6 Memoria de video del periférico VGA
 
-<!-- Sugerencia: fórmula de dirección de cada casilla, formato de la palabra de tile
-(tabla de bits), codificación de colores, tamaño de la cuadrícula elegida con su
-justificación, comportamiento fuera de rango y quién limpia la pantalla. -->
+La pantalla de 640×480 se divide en una cuadrícula de **20 columnas × 15 filas** de tiles de 32×32 píxeles (300 tiles). La dirección de byte del tile en fila `f` y columna `c` es
+
+`0x0001_1000 + 4·(f·20 + c)`
+
+y el CPU actualiza una casilla con una única escritura. Se eligió 32×32 porque es potencia de dos (la división se reduce a tomar `hcount[9:5]` y `vcount[9:5]`), porque 8×8 casillas caben holgadamente (los dos tableros ocupan 8 filas y 8 columnas cada uno) y porque cabe en una sola memoria de 300 palabras.
+
+Los dos tableros se dibujan en las filas 6 a 13: el del Jugador 1 en las columnas 1 a 8 y el del Jugador 2 en las columnas 11 a 18. Las demás posiciones se usan para el HUD de texto.
+
+**Tabla 3.6.** Formato de la palabra de tile (32 bits; solo se usan los 12 bits inferiores).
+
+| Bits | Campo | Descripción |
+|---|---|---|
+| [31:12] | — | Ignorados |
+| [11] | `TEXT_ENABLE` | 1 = el tile muestra un carácter de la fuente |
+| [10:3] | `ASCII` | Código del carácter (si `TEXT_ENABLE = 1`) |
+| [2:0] | `color` | Estado de la casilla o color del carácter |
+
+**Tabla 3.7.** Codificación de color de las casillas de tablero.
+
+| Valor [2:0] | Estado | Color RGB (4 bits por canal) |
+|---|---|---|
+| `000` | Agua | (0, 4, 15) azul |
+| `001` | Barco propio | (8, 8, 8) gris |
+| `010` | Impacto | (15, 0, 0) rojo |
+| `011` | Fallo | (15, 15, 15) blanco |
+| otros | Depuración | (15, 0, 15) magenta |
+
+Los tiles de texto se dibujan en blanco sobre negro. El **cursor** se controla con el registro `0x0001_0148` y se superpone como un borde amarillo de 2 píxeles: bit 7 = visible, bit 6 = tablero (0 = J1, 1 = J2), bits [5:3] = fila y bits [2:0] = columna. Una dirección fuera de rango (≥ 300) se ignora al escribir y se lee como cero. La memoria **no se limpia por hardware**: el firmware (`init_game`) escribe ceros en las 300 posiciones y dibuja el título.
 
 ### 3.7 Registro de entradas del Jugador 1
 
-<!-- Sugerencia: tabla con el mapeo exacto de bits del registro de estado (navegación,
-selección, confirmación y reinicio) y qué representa cada bit (nivel o pulso). -->
+**Tabla 3.8.** Registro `btn_status` (`0x0001_0120`, solo lectura).
+
+| Bit | Señal | Botón físico (Nexys 4) | Tipo |
+|---|---|---|---|
+| 0 | Arriba | BTNU | Pulso (sticky) |
+| 1 | Abajo | BTND | Pulso (sticky) |
+| 2 | Izquierda | BTNL | Pulso (sticky) |
+| 3 | Derecha | BTNR | Pulso (sticky) |
+| 4 | SEL (rotar orientación) | SW0 | Pulso (sticky) |
+| 5 | OK (confirmar / disparar) | BTNC | Pulso (sticky) |
+| 6 | RST (reiniciar partida) | SW1 | Pulso (sticky) |
+| [31:7] | — | — | 0 |
+
+Cada bit se pone en 1 cuando se detecta un flanco de subida de la entrada ya filtrada, y permanece en 1 hasta que el CPU realiza una lectura de la dirección `0x0001_0120` (`input_ack_i`), momento en que se borra. De esta forma una pulsación genera exactamente un evento aunque el programa tarde en consultarla.
 
 ### 3.8 Registros del periférico UART
 
-<!-- Sugerencia: tabla de registros con dirección, bits y descripción (control/estado,
-datos TX, datos RX). Indicar cualquier cambio respecto al Proyecto 2. -->
+**Tabla 3.9.** Registros del periférico UART.
+
+| Dirección | `addr_i` | Registro | Bits | Descripción |
+|---|---|---|---|---|
+| `0x0001_0040` | `00` | STATUS | [0] `TX_BUSY` | 1 mientras se transmite un byte |
+| | | | [1] `RX_VALID` | 1 si hay un byte recibido sin leer; se limpia escribiendo 1 en este bit |
+| | | | [2] `RX_FRAME_ERROR` | 1 si el último bit de parada fue inválido |
+| `0x0001_0044` | `01` | TX | [7:0] | Escribir inicia la transmisión del byte |
+| `0x0001_0048` | `10` | RX | [7:0] | Último byte válido recibido |
+
+Respecto al Proyecto 2 se conservó el periférico sin cambios funcionales; el firmware limpia `RX_VALID` escribiendo el valor 2 en STATUS inmediatamente después de leer RX, y espera `TX_BUSY = 0` antes de cada escritura en TX.
 
 ### 3.9 Protocolo de aplicación sobre UART
 
-<!-- Sugerencia: describir la trama física (baudios, formato) y el formato de las tramas
-de aplicación (delimitadores, separadores, terminador). Incluir tablas de mensajes
-PC → FPGA y FPGA → PC con sus campos y códigos, el manejo de datos inválidos y un
-ejemplo de intercambio. Cubrir todos los eventos que exige el enunciado. -->
+El protocolo es de **líneas de texto ASCII**: cada trama es una secuencia de campos separados por comas y terminada en el carácter de nueva línea `\n` (0x0A). Es legible a simple vista en un terminal serial y se interpreta byte a byte con una máquina de estados sin necesidad de búfer.
 
 #### Trama física UART
 
+**Tabla 3.10.** Parámetros de la trama física.
+
+| Parámetro | Valor |
+|---|---|
+| Velocidad | 115 200 baudios |
+| Bits de datos | 8 (LSB primero) |
+| Paridad | Ninguna |
+| Bits de parada | 1 |
+| Ciclos de `clk_i` por bit | 868 (100 MHz / 115 200) |
+| Control de flujo | Ninguno |
+
 #### Mensajes PC → FPGA
+
+**Tabla 3.11.** Mensajes del Jugador 2 hacia la FPGA.
+
+| Mensaje | Formato | Campos | Significado |
+|---|---|---|---|
+| Colocación | `P,barco,fila,col,orient\n` | barco ∈ {0,1,2}; fila, col ∈ {0..7}; orient ∈ {H,V} | Coloca el barco en (fila, col) |
+| Disparo | `S,fila,col\n` | fila, col ∈ {0..7} | Dispara a la casilla del Jugador 1 |
+
+El barco 0 mide 4 casillas, el barco 1 mide 3 y el barco 2 mide 2. Una colocación horizontal ocupa (fila, col) … (fila, col+largo−1) y una vertical (fila, col) … (fila+largo−1, col).
 
 #### Mensajes FPGA → PC
 
+**Tabla 3.12.** Mensajes de la FPGA hacia el Jugador 2.
+
+| Mensaje | Formato | Significado | Evento |
+|---|---|---|---|
+| `PA` | `PA,barco\n` | Colocación aceptada | Respuesta a `P` válida |
+| `PR` | `PR,barco,F\n` | Rechazada: fuera del tablero | Respuesta a `P` inválida |
+| `PR` | `PR,barco,O\n` | Rechazada: traslape o barco repetido | Respuesta a `P` inválida |
+| `B` | `B\n` | Inicio de la batalla | Ambas flotas completas |
+| `T` | `T,jugador\n` | Turno del jugador 1 o 2 | Inicio de batalla y tras cada disparo válido |
+| `SR` | `SR,fila,col,res\n` | Resultado del disparo del J2 | res ∈ {F fallo, I impacto, H hundido} |
+| `DR` | `DR,fila,col,res\n` | Resultado del disparo del J1 (mismo formato) | Informa al J2 sobre el disparo local |
+| `FIN` | `FIN,jugador\n` | Fin de la partida y ganador | Victoria de J1 o J2 |
+
 #### Manejo de datos inválidos
+
+El receptor del firmware (`poll_uart`) es una máquina de estados de 15 estados que valida cada carácter esperado (letra inicial, comas, dígitos 0–7, `H`/`V` y `\n`). Ante cualquier carácter inesperado, la máquina vuelve al estado 0 y **descarta la trama sin responder**. Los valores sintácticamente válidos pero ilegales se rechazan en `process_uart_place` con `PR` (fuera de tablero o traslape/barco ya colocado). Los disparos recibidos fuera de la fase de batalla, fuera del turno del J2 o sobre una casilla ya disparada se ignoran sin cambiar el estado. La aplicación de PC, por su parte, valida los campos antes de enviar (sección 10.3).
 
 #### Ejemplo de intercambio
 
+**Tabla 3.13.** Secuencia de ejemplo (el Jugador 1 ya colocó su flota).
+
+| # | Dirección | Trama | Efecto |
+|---|---|---|---|
+| 1 | PC → FPGA | `P,0,0,0,H\n` | Barco de 4 en la fila 0, columnas 0–3 |
+| 2 | FPGA → PC | `PA,0\n` | Aceptado |
+| 3 | PC → FPGA | `P,1,0,2,H\n` | Traslapa con el barco 0 |
+| 4 | FPGA → PC | `PR,1,O\n` | Rechazado |
+| 5 | PC → FPGA | `P,1,5,0,V\n` | Fuera del tablero (5+3 > 8) |
+| 6 | FPGA → PC | `PR,1,F\n` | Rechazado |
+| 7 | PC → FPGA | `P,1,2,0,H\n`, `P,2,4,0,V\n` | Completa la flota; ambas aceptadas con `PA,1` y `PA,2` |
+| 8 | FPGA → PC | `B\n`, `T,1\n` | Inicia la batalla, turno del J1 |
+| 9 | FPGA → PC | `DR,0,0,I\n`, `T,2\n` | J1 dispara a (0,0): impacto; turno del J2 |
+| 10 | PC → FPGA | `S,0,0\n` | J2 dispara a (0,0) |
+| 11 | FPGA → PC | `SR,0,0,I\n`, `T,1\n` | Impacto; turno del J1 |
+
+Los formatos `PR,1,O`, `PR,1,F`, `SR` y `DR` son los que emite `game.S` y los que verifica `game_firmware_tb`.
+
 ### 3.10 Organización de datos en RAM
 
-<!-- Sugerencia: tabla con cada región o variable (tableros, información de barcos, fase,
-turno, contadores, variables auxiliares), su dirección base, tamaño y codificación de
-cada casilla. -->
+**Tabla 3.14.** Variables en RAM (base `0x0000_2000`, una palabra de 32 bits por variable).
+
+| Dirección | Nombre | Descripción |
+|---|---|---|
+| `0x2000` | `GAME_STATE` | 0 colocación, 1 batalla, 2 finalizado |
+| `0x2004` | `TURN` | 1 = Jugador 1, 2 = Jugador 2 |
+| `0x2008` | `CURSOR_ROW` | Fila del cursor (0–7) |
+| `0x200C` | `CURSOR_COL` | Columna del cursor (0–7) |
+| `0x2010` | `ORIENTATION` | 0 horizontal, 1 vertical |
+| `0x2014` | `CURRENT_SHIP` | Barco en colocación del J1 (0–2) |
+| `0x2018` | `PLACED_J1` | Barcos colocados por J1 |
+| `0x201C` | `PLACED_J2` | Barcos colocados por J2 |
+| `0x2020` | `WINS_J1` | Victorias de J1 (se conserva al reiniciar) |
+| `0x2024` | `WINS_J2` | Victorias de J2 (se conserva al reiniciar) |
+| `0x2100`–`0x21FC` | `BOARD_J1` | 64 palabras: 0 agua, 1–3 identidad del barco |
+| `0x2200`–`0x22FC` | `BOARD_J2` | 64 palabras: 0 agua, 1–3 identidad del barco |
+| `0x2300`–`0x23FC` | `SHOTS_J1` | 64 palabras: 0 sin disparar, 2 impacto, 3 fallo |
+| `0x2400`–`0x24FC` | `SHOTS_J2` | 64 palabras: 0 sin disparar, 2 impacto, 3 fallo |
+| `0x2500` | `UART_LAST_BYTE` | Último byte recibido |
+| `0x2504` | `UART_PARSE_STATE` | Estado del parser (0–14) |
+| `0x2508`–`0x2514` | `UART_SHIP/ROW/COL/ORIENT` | Campos de la trama en curso |
+| `0x2518` | `UART_FRAME_READY` | 1 cuando hay una trama completa |
+| `0x251C` | `J2_SHIP_MASK` | Máscara de barcos ya colocados por J2 |
+| `0x2520` | `UART_CMD` | Tipo de trama (1 = P, 2 = S) |
+
+El índice de una casilla es `fila·8 + columna` y su dirección es `base + 4·índice`. En los tableros `BOARD_*` se guarda la identidad del barco (1 a 3, igual a `barco + 1`) para poder determinar si un barco quedó hundido; `SHOTS_*` solo guarda impacto o fallo.
 
 ### 3.11 Requisitos eléctricos
 
-<!-- Sugerencia: estándar lógico de la tarjeta, conexión de VGA, UART-USB, buzzer y
-botones. Indicar el modelo exacto de la tarjeta usada. -->
+El sistema se implementa en la tarjeta **Digilent Nexys 4 Rev. B** (FPGA Xilinx Artix-7 XC7A100T-1CSG324C). Todos los pines de usuario usan el estándar **LVCMOS33** (3,3 V). Los pulsadores y los interruptores son activos en alto, excepto el botón CPU RESET, que es activo en bajo. El VGA utiliza un DAC resistivo de 4 bits por canal (12 bits de color) directamente conectado a la FPGA, con `hsync` y `vsync` activos en bajo. La UART utiliza el puente USB-UART integrado de la tarjeta (pines C4 y D4), por lo que la PC se conecta con el mismo cable USB de programación. Los displays de 7 segmentos son de ánodo común, con ánodos y segmentos activos en bajo. El LED de estado se conecta a LED0–LED2 (activos en alto). El buzzer es de tipo **activo de corriente continua** conectado al pin 1 del conector PMOD JA (B13), accionado directamente por la salida digital `buzz_pwm_o`; un nivel alto lo hace sonar.
+
+<!-- PENDIENTE: confirmar el modelo exacto del buzzer y su corriente de consumo respecto al límite del pin PMOD -->
 
 ---
 
