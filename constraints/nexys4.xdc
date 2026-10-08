@@ -59,11 +59,15 @@ set_property -dict { PACKAGE_PIN K3 IOSTANDARD LVCMOS33 } [get_ports {seg_o[4]}]
 set_property -dict { PACKAGE_PIN M2 IOSTANDARD LVCMOS33 } [get_ports {seg_o[5]}] ;# CF
 set_property -dict { PACKAGE_PIN L6 IOSTANDARD LVCMOS33 } [get_ports {seg_o[6]}] ;# CG
 
-## Solo usamos 4 de los 8 anodos disponibles (4 digitos: AN0-AN3)
-set_property -dict { PACKAGE_PIN N6 IOSTANDARD LVCMOS33 } [get_ports {anode_o[0]}] ;# AN0
-set_property -dict { PACKAGE_PIN M6 IOSTANDARD LVCMOS33 } [get_ports {anode_o[1]}] ;# AN1
-set_property -dict { PACKAGE_PIN M3 IOSTANDARD LVCMOS33 } [get_ports {anode_o[2]}] ;# AN2
-set_property -dict { PACKAGE_PIN N5 IOSTANDARD LVCMOS33 } [get_ports {anode_o[3]}] ;# AN3
+## Display de 8 digitos: AN7-AN4 apagados, AN3-AN0 para marcador
+set_property -dict { PACKAGE_PIN N6 IOSTANDARD LVCMOS33 } [get_ports {anode_o[0]}] ;# AN0 - unidades J2
+set_property -dict { PACKAGE_PIN M6 IOSTANDARD LVCMOS33 } [get_ports {anode_o[1]}] ;# AN1 - decenas J2
+set_property -dict { PACKAGE_PIN M3 IOSTANDARD LVCMOS33 } [get_ports {anode_o[2]}] ;# AN2 - unidades J1
+set_property -dict { PACKAGE_PIN N5 IOSTANDARD LVCMOS33 } [get_ports {anode_o[3]}] ;# AN3 - decenas J1
+set_property -dict { PACKAGE_PIN N2 IOSTANDARD LVCMOS33 } [get_ports {anode_o[4]}] ;# AN4 - apagado
+set_property -dict { PACKAGE_PIN N4 IOSTANDARD LVCMOS33 } [get_ports {anode_o[5]}] ;# AN5 - apagado
+set_property -dict { PACKAGE_PIN L1 IOSTANDARD LVCMOS33 } [get_ports {anode_o[6]}] ;# AN6 - apagado
+set_property -dict { PACKAGE_PIN M1 IOSTANDARD LVCMOS33 } [get_ports {anode_o[7]}] ;# AN7 - apagado
 
 ## LED de estado (3 bits, usamos LED0-LED2; activos en alto)
 set_property -dict { PACKAGE_PIN T8 IOSTANDARD LVCMOS33 } [get_ports {led_o[0]}]
@@ -233,3 +237,5 @@ set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_button_status_regs
 set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_button_status_regs
 set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_button_status_regs
 
+## Punto decimal del display (activo en bajo)
+set_property -dict { PACKAGE_PIN M4 IOSTANDARD LVCMOS33 } [get_ports {dp_o}] ;# DP apagado

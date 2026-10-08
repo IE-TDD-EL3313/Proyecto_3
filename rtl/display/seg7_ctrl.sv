@@ -10,7 +10,7 @@ module seg7_ctrl #(
     input  logic [31:0] wdata_i,  // 4 digitos BCD, 4 bits cada uno (0x0001_0130)
     input  logic        we_i,
     output logic [6:0]  seg_o,    // patron gfedcba
-    output logic [3:0] anode_o,  // activo en bajo
+    output logic [7:0] anode_o,  // activo en bajo
     output logic [31:0] rdata_o   // lectura del registro de datos actual (mux de lectura, P3 ficha 7.27)
 );
 
@@ -75,7 +75,7 @@ module seg7_ctrl #(
 
     // --- Driver de anodos: activo en bajo en Nexys 4 ---
     always_comb begin
-        anode_o = 4'b1111;
+        anode_o = 8'b1111_1111;
         anode_o[digit_sel] = 1'b0;
     end
 
