@@ -48,7 +48,7 @@ Se implementó el sistema completo descrito en el planteamiento: procesador rv32
 
 Durante la implementación se tomaron las siguientes decisiones que se apartan del planteamiento original, y que se documentan como decisiones de diseño:
 
-- **Procesador con habilitación de reloj (`cpu_ce`)**: el núcleo sigue siendo de ciclo único, pero en el sistema final confirma una instrucción cada 4 ciclos de `clk_i` (25 MIPS máximos) para relajar el camino crítico a 100 MHz. El archivo de restricciones declara las rutas del PC y del banco de registros como *multicycle path* (setup 4, hold 3).
+- **Procesador con habilitación de reloj (`cpu_ce`)**: el núcleo sigue siendo uniciclo, pero en el sistema final confirma una instrucción cada 4 ciclos de `clk_i` (25 MIPS máximos) para relajar el camino crítico a 100 MHz. El archivo de restricciones declara las rutas del PC y del banco de registros como *multicycle path* (setup 4, hold 3).
 - **Registro adicional de control del cursor VGA** en `0x0001_0148`, no previsto en el planteamiento, que superpone el cursor sobre la casilla seleccionada sin modificar la memoria de tiles.
 - **Texto en el VGA**: se añadió la capacidad de mostrar caracteres (título, marcador y estadísticas) mediante el bit 11 de la palabra de tile y una fuente de 8×8.
 - **Buzzer**: en lugar de generar tonos de distintas frecuencias, se utiliza un buzzer activo de corriente continua y cada evento se distingue por un patrón de pitidos (cantidad y duración) generado por una máquina de estados.
@@ -57,9 +57,10 @@ Durante la implementación se tomaron las siguientes decisiones que se apartan d
 
 Limitaciones conocidas:
 
-- La verificación física en la tarjeta, los reportes de utilización y timing de Vivado y la simulación post-implementación temporizada no están incluidos en esta versión del informe (secciones 12.2 y 12.3).
 - Los testbenches del procesador en `cpu/tb` no instancian el puerto `ce_i` agregado posteriormente al núcleo; para ejecutarlos se les debe fijar `ce_i = 1`.
 - `sistema_top_tb.sv` declara `anode_o` de 4 bits mientras que el top final lo expone de 8 bits (solo genera una advertencia de relleno).
+- El firmware no envía una notificación explícita de «inicio de colocación» por UART al arrancar o reiniciar (la aplicación de PC permite colocar desde que se conecta), y el mensaje `FIN,jugador` no incluye un resumen de la partida (disparos totales, barcos hundidos); el enunciado sugiere ambos.
+- Al terminar la partida el VGA muestra el marcador de victorias y las estadísticas pero no un texto explícito con el jugador ganador, y el turno activo se indica únicamente con el cursor (visible solo en el turno del Jugador 1), el LED de fase y la notificación `T` al PC.
 - El UART no aplica control de flujo: el Jugador 2 debe esperar la respuesta de la FPGA antes de enviar la siguiente trama.
 
 <!-- PENDIENTE: completar con las limitaciones observadas en la prueba física (parpadeo del VGA, ruido del buzzer, pérdida de tramas, etc.) -->
@@ -1048,7 +1049,13 @@ Módulo `uart_peripheral`, con `baud_gen`, `uart_tx` y `uart_rx`.
 
 Se reutilizó el periférico UART del Proyecto 2 con su interfaz de registros (STATUS, TX, RX). En el sistema final se integra mediante el desplazamiento de direcciones `addr_i = (mmio_addr − 0x10040) >> 2` y se parametriza con `CLK_FREQ_HZ = 100 MHz` y `BAUD_RATE = 115 200`.
 
-<!-- PENDIENTE: indicar con precisión qué cambios se hicieron respecto al módulo del Proyecto 2 (comparar con ese repositorio) -->
+![Figura 8.7b. FSM del transmisor UART](../diseño/diagramas/fsm_uart_tx.jpg)
+
+**Figura 8.7b.** Máquina de estados del transmisor UART (`uart_tx`).
+
+![Figura 8.7c. FSM del receptor UART](../diseño/diagramas/fsm_uart_rx.jpg)
+
+**Figura 8.7c.** Máquina de estados del receptor UART (`uart_rx`).
 
 #### Relación con el sistema
 
@@ -1332,7 +1339,7 @@ Las 59 pruebas unitarias de `pc/tests` verifican estos casos.
 
 ### 10.4 Interpretación de paquetes
 
-`parse_message` recibe una línea terminada en `\n` (se tolera `\r\n`), la separa por comas y, según el primer campo, valida el número de campos y los rangos: `PA,barco`, `PR,barco,{F|O}`, `B`, `T,{1|2}`, `SR`/`DR,fila,col,{F|I|H}` y `FIN,{1|2}`. Devuelve un objeto `Message` con el tipo y los campos. `Player2State.handle_message` actualiza el estado: `PA` confirma el barco en el tablero propio, `PR` muestra el motivo («La colocación se traslapa con otro barco.» o «El barco queda fuera del tablero.»), `B` marca el inicio de la batalla, `T` actualiza el turno, `SR` marca en el tablero propio el resultado del disparo del rival, `DR` marca en el tablero rival el resultado del disparo del J1 (la FPGA lo reporta al J2) y `FIN` termina la partida y registra al ganador.
+`parse_message` recibe una línea terminada en `\n` (se tolera `\r\n`), la separa por comas y, según el primer campo, valida el número de campos y los rangos: `PA,barco`, `PR,barco,{F|O}`, `B`, `T,{1|2}`, `SR`/`DR,fila,col,{F|I|H}` y `FIN,{1|2}`. Devuelve un objeto `Message` con el tipo y los campos. `Player2State.handle_message` actualiza el estado: `PA` confirma el barco en el tablero propio, `PR` muestra el motivo («La colocación se traslapa con otro barco.» o «El barco queda fuera del tablero.»), `B` marca el inicio de la batalla, `T` actualiza el turno,`SR` (resultado del disparo propio del J2) marca la casilla en el tablero rival, `DR` (disparo recibido del J1 sobre el tablero del J2) marca la casilla en el tablero propio, y `FIN`
 
 ### 10.5 Instrucciones de ejecución
 
