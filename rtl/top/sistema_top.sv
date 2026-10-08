@@ -26,7 +26,8 @@ module sistema_top #(
 
     // Displays
     output logic [6:0] seg_o,
-    output logic [3:0] anode_o,
+    output logic [7:0] anode_o,
+    output logic       dp_o,
 
     // LED
     output logic [2:0] led_o,
@@ -42,6 +43,9 @@ module sistema_top #(
     output logic [3:0] b_o
 
 );
+
+    assign dp_o = 1'b1;
+
 
     // ---------------------------------------------------------
     // Reset

@@ -22,7 +22,7 @@ module perifericos_locales (
     input  logic [31:0] disp_wdata_i,
     input  logic        disp_we_i,
     output logic [6:0]  seg_o,
-    output logic [3:0]  anode_o,
+    output logic [7:0]  anode_o,
     output logic [31:0] rdata_display_o,
 
     // --- LED de estado ---
