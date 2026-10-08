@@ -16,6 +16,7 @@ module btn_input #(
     input  logic        clk_i,        // 100 MHz
     input  logic        rst_i,
     input  logic [6:0]  btn_raw_i,
+    input  logic        ack_i,
     output logic [31:0] rdata_o
 );
     // Nota: sin addr_i. El decodificador de direcciones (P3, ficha 7.26)
@@ -90,10 +91,17 @@ module btn_input #(
     logic [31:0] btn_status;
 
     always_ff @(posedge clk_i) begin
-        if (rst_i)
+        if (rst_i) begin
             btn_status <= 32'b0;
-        else
-            btn_status <= {25'b0, btn_pulse};
+        end else begin
+            // Conservar cada evento hasta que el CPU lea INPUT.
+            // Si aparece un nuevo pulso en el mismo ciclo del ACK,
+            // el nuevo evento no se pierde.
+            if (ack_i)
+                btn_status <= {25'b0, btn_pulse};
+            else
+                btn_status <= btn_status | {25'b0, btn_pulse};
+        end
     end
 
     assign rdata_o = btn_status;

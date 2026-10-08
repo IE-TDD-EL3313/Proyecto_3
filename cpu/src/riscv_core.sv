@@ -2,7 +2,7 @@
 // Direcciones en bytes. Reset sincrono activo en alto; escrituras bloqueadas en reset.
 // Subconjunto educativo: sin excepciones, sin esperas, accesos de palabra alineados.
 module riscv_core (
- input logic clk_i, rst_i,
+ input logic clk_i, rst_i, ce_i,
  input logic [31:0] ProgIn_i, DataIn_i,
  output logic [31:0] ProgAddress_o, DataAddress_o, DataOut_o,
  output logic we_o
@@ -20,6 +20,7 @@ module riscv_core (
  pc_register u_pc_register (
   .clk_i(clk_i),
   .rst_i(rst_i),
+  .ce_i(ce_i),
   .NextPC(NextPC),
   .PC(PC)
  );
@@ -55,6 +56,7 @@ module riscv_core (
  register_file u_register_file (
   .clk_i(clk_i),
   .rst_i(rst_i),
+  .ce_i(ce_i),
   .RegWrite(RegWrite),
   .rs1(rs1),
   .rs2(rs2),
@@ -120,5 +122,5 @@ module riscv_core (
  assign ProgAddress_o = PC;
  assign DataAddress_o = ALUResult;
  assign DataOut_o = RD2;
- assign we_o = MemWrite & ~rst_i;
+ assign we_o = MemWrite & ce_i & ~rst_i;
 endmodule

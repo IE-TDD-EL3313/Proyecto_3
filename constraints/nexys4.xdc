@@ -72,3 +72,164 @@ set_property -dict { PACKAGE_PIN R8 IOSTANDARD LVCMOS33 } [get_ports {led_o[2]}]
 
 ## Buzzer: se usa el pin 1 del PMOD JA (B13)
 set_property -dict { PACKAGE_PIN B13 IOSTANDARD LVCMOS33 } [get_ports {buzz_pwm_o}] ;# JA1
+## ============================================================
+## UART USB - Jugador 2 (PC)
+## Nexys 4 Rev. B, interfaz USB-RS232 integrada
+## ============================================================
+
+## PC -> FPGA
+set_property -dict { PACKAGE_PIN C4 IOSTANDARD LVCMOS33 } [get_ports {uart_rx_i}]
+
+## FPGA -> PC
+set_property -dict { PACKAGE_PIN D4 IOSTANDARD LVCMOS33 } [get_ports {uart_tx_o}]
+
+# ============================================================
+# CPU RV32I - Multicycle por clock-enable
+# cpu_ce permite commit una vez cada 4 ciclos de clk_i (100 MHz)
+# Solo aplica al estado interno PC/Register File del CPU.
+# ============================================================
+
+set cpu_pc_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_processor/core/u_pc_register/PC_reg*
+}]
+
+set cpu_rf_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_processor/core/u_register_file/registers_reg*
+}]
+
+# PC -> PC
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_pc_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_pc_regs
+
+# PC -> Register File
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_rf_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_rf_regs
+
+# Register File -> PC
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_pc_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_pc_regs
+
+# Register File -> Register File
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_rf_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_rf_regs
+
+# ============================================================
+# CPU RV32I - Multicycle hacia destinos de escritura
+#
+# El CPU realiza commit una vez cada 4 ciclos mediante cpu_ce.
+# Las escrituras RAM/MMIO originadas por el estado del CPU
+# disponen por tanto de 4 ciclos.
+#
+# Los caminos internos de los perifericos NO se relajan.
+# ============================================================
+
+set cpu_ram_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_processor/ram/*
+}]
+
+set cpu_buzzer_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_locales/u_buzzer_gen/*
+}]
+
+set cpu_display_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_locales/u_seg7_ctrl/disp_data_reg*
+}]
+
+set cpu_led_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_locales/u_led_reg/led_o_reg*
+}]
+
+set cpu_vga_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_vga/u_memory/mem_reg*
+}]
+
+set cpu_vga_cursor_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *vga_cursor_ctrl_reg*
+}]
+
+set cpu_uart_write_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    (
+        NAME =~ *u_uart/tx_data_r_reg* ||
+        NAME =~ *u_uart/tx_start_reg ||
+        NAME =~ *u_uart/rx_pending_r_reg ||
+        NAME =~ *u_uart/rx_frame_error_r_reg*
+    )
+}]
+
+# PC -> destinos de escritura
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_ram_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_ram_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_buzzer_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_buzzer_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_display_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_display_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_led_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_led_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_vga_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_vga_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_vga_cursor_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_vga_cursor_regs
+
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_uart_write_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_uart_write_regs
+
+# Register File -> destinos de escritura
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_ram_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_ram_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_buzzer_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_buzzer_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_display_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_display_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_led_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_led_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_vga_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_vga_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_vga_cursor_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_vga_cursor_regs
+
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_uart_write_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_uart_write_regs
+
+
+# ============================================================
+# CPU RV32I -> registro sticky de botones
+#
+# btn_status se limpia mediante input_ack_i, generado cuando el
+# CPU consume INPUT durante cpu_ce. Por ello, este camino forma
+# parte de la operacion multicycle de 4 ciclos del CPU.
+# ============================================================
+
+set cpu_button_status_regs [get_cells -hier -filter {
+    IS_SEQUENTIAL == 1 &&
+    NAME =~ *u_locales/u_btn_input/btn_status_reg*
+}]
+
+# PC -> btn_status
+set_multicycle_path -setup 4 -from $cpu_pc_regs -to $cpu_button_status_regs
+set_multicycle_path -hold  3 -from $cpu_pc_regs -to $cpu_button_status_regs
+
+# Register File -> btn_status
+set_multicycle_path -setup 4 -from $cpu_rf_regs -to $cpu_button_status_regs
+set_multicycle_path -hold  3 -from $cpu_rf_regs -to $cpu_button_status_regs
+

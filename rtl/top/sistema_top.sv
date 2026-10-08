@@ -12,7 +12,7 @@
 //   - Multiplexor de lectura MMIO
 
 module sistema_top #(
-    parameter ROM_FILE = "cpu/firmware/handoff.hex"
+    parameter ROM_FILE = "game.hex"
 ) (
     input  logic       clk_i,
     input  logic       rst_ni,
@@ -39,10 +39,8 @@ module sistema_top #(
     output logic       vsync_o,
     output logic [3:0] r_o,
     output logic [3:0] g_o,
-    output logic [3:0] b_o,
+    output logic [3:0] b_o
 
-    // Depuracion
-    output logic [31:0] pc_o
 );
 
     // ---------------------------------------------------------
@@ -64,6 +62,27 @@ module sistema_top #(
     logic        mmio_sel;
     logic        mmio_we;
 
+    // PC interno, disponible para depuracion en simulacion.
+    // No se expone como puerto fisico de la FPGA.
+    logic [31:0] pc_internal;
+
+    // ---------------------------------------------------------
+    // Clock enable del procesador
+    // ---------------------------------------------------------
+    // Todo el sistema permanece fisicamente a 100 MHz.
+    // El CPU realiza un commit cada 4 ciclos: 25 MIPS max.
+    logic [1:0] cpu_ce_cnt;
+    logic       cpu_ce;
+
+    always_ff @(posedge clk_i) begin
+        if (rst_i)
+            cpu_ce_cnt <= 2'b00;
+        else
+            cpu_ce_cnt <= cpu_ce_cnt + 2'b01;
+    end
+
+    assign cpu_ce = (cpu_ce_cnt == 2'b11);
+
     // ---------------------------------------------------------
     // Selecciones del decodificador
     // ---------------------------------------------------------
@@ -74,6 +93,7 @@ module sistema_top #(
     logic sel_display;
     logic sel_led;
     logic sel_buzzer;
+    logic sel_vga_ctrl;
     logic sel_vga;
 
     logic we_ram;
@@ -81,6 +101,7 @@ module sistema_top #(
     logic we_display;
     logic we_led;
     logic we_buzzer;
+    logic we_vga_ctrl;
     logic we_vga;
 
     // ---------------------------------------------------------
@@ -95,6 +116,10 @@ module sistema_top #(
 
     // VGA es actualmente de escritura.
     logic [31:0] vga_rdata;
+
+    // Control visual del cursor VGA:
+    // [7] visible, [6] tablero, [5:3] fila, [2:0] columna.
+    logic [7:0] vga_cursor_ctrl;
 
     // Dirección local del periférico UART.
     logic [1:0] uart_addr;
@@ -111,12 +136,13 @@ module sistema_top #(
     ) u_processor (
         .clk_i       (clk_i),
         .rst_i       (rst_i),
+        .ce_i        (cpu_ce),
         .mmio_rdata_i(mmio_rdata),
         .mmio_addr_o (mmio_addr),
         .mmio_wdata_o(mmio_wdata),
         .mmio_sel_o  (mmio_sel),
         .mmio_we_o   (mmio_we),
-        .pc_o        (pc_o)
+        .pc_o        (pc_internal)
     );
 
     // ---------------------------------------------------------
@@ -132,15 +158,17 @@ module sistema_top #(
         .sel_input_o  (sel_input),
         .sel_display_o(sel_display),
         .sel_led_o    (sel_led),
-        .sel_buzzer_o (sel_buzzer),
-        .sel_vga_o    (sel_vga),
+        .sel_buzzer_o  (sel_buzzer),
+        .sel_vga_ctrl_o(sel_vga_ctrl),
+        .sel_vga_o     (sel_vga),
 
         .we_ram_o     (we_ram),
         .we_uart_o    (we_uart),
         .we_display_o (we_display),
         .we_led_o     (we_led),
-        .we_buzzer_o  (we_buzzer),
-        .we_vga_o     (we_vga)
+        .we_buzzer_o   (we_buzzer),
+        .we_vga_ctrl_o (we_vga_ctrl),
+        .we_vga_o      (we_vga)
     );
 
     // ---------------------------------------------------------
@@ -173,6 +201,7 @@ module sistema_top #(
         .rst_i          (rst_i),
 
         .btn_raw_i      (btn_raw_i),
+        .input_ack_i    (sel_input && cpu_ce && !mmio_we),
         .rdata_input_o  (input_rdata),
 
         .disp_wdata_i   (mmio_wdata),
@@ -193,6 +222,23 @@ module sistema_top #(
     );
 
     // ---------------------------------------------------------
+    // Control de cursor VGA
+    //
+    // 0x00010148:
+    //   bit 7    = visible
+    //   bit 6    = tablero (0=J1, 1=J2)
+    //   bits 5:3 = fila
+    //   bits 2:0 = columna
+    // ---------------------------------------------------------
+
+    always_ff @(posedge clk_i) begin
+        if (rst_i)
+            vga_cursor_ctrl <= 8'b0;
+        else if (we_vga_ctrl)
+            vga_cursor_ctrl <= mmio_wdata[7:0];
+    end
+
+    // ---------------------------------------------------------
     // VGA
     //
     // Dirección del CPU expresada en bytes:
@@ -211,9 +257,10 @@ module sistema_top #(
         .clk_i       (clk_i),
         .rst_i       (rst_i),
         .vga_we_i    (we_vga),
-        .vga_addr_i  (vga_addr),
-        .vga_wdata_i (mmio_wdata),
-        .hsync_o     (hsync_o),
+        .vga_addr_i   (vga_addr),
+        .vga_wdata_i  (mmio_wdata),
+        .cursor_ctrl_i(vga_cursor_ctrl),
+        .hsync_o      (hsync_o),
         .vsync_o     (vsync_o),
         .r_o         (r_o),
         .g_o         (g_o),
