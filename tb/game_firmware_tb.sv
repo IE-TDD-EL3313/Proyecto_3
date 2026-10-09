@@ -211,6 +211,29 @@ module game_firmware_tb;
     endtask
 
     // ------------------------------------------------------------
+    // Verificar una respuesta UART completa.
+    //
+    // La recepcion debe comenzar antes del primer byte TX.
+    // ------------------------------------------------------------
+    task automatic expect_uart_text(input string expected);
+        logic [7:0] received;
+        integer idx;
+        begin
+            for (idx = 0; idx < expected.len(); idx = idx + 1) begin
+                uart_receive_byte(received);
+
+                if (received !== expected[idx]) begin
+                    $display(
+                        "ERROR UART TEXTO: byte %0d esperado=%h recibido=%h",
+                        idx, expected[idx], received
+                    );
+                    errors = errors + 1;
+                end
+            end
+        end
+    endtask
+
+    // ------------------------------------------------------------
     // Recibir y verificar mensaje de cambio de turno:
     //
     //     T,<jugador>\n
@@ -277,6 +300,38 @@ module game_firmware_tb;
             end
 
             repeat (300) @(negedge clk_i);
+        end
+    endtask
+
+    // ------------------------------------------------------------
+    // Reiniciar partida y verificar notificacion UART RST\\n.
+    // ------------------------------------------------------------
+    task automatic restart_expect_uart;
+        logic [7:0] b0, b1, b2, b3;
+        begin
+            fork
+                begin
+                    press_button(7'b1000000);
+                end
+
+                begin
+                    uart_receive_byte(b0);
+                    uart_receive_byte(b1);
+                    uart_receive_byte(b2);
+                    uart_receive_byte(b3);
+                end
+            join
+
+            if (b0 !== 8'h52 ||
+                b1 !== 8'h53 ||
+                b2 !== 8'h54 ||
+                b3 !== 8'h0A) begin
+                $display(
+                    "ERROR UART RST: esperado=52 53 54 0a recibido=%h %h %h %h",
+                    b0, b1, b2, b3
+                );
+                errors = errors + 1;
+            end
         end
     endtask
 
@@ -509,7 +564,7 @@ module game_firmware_tb;
         end
     endtask
 
-    localparam integer VGA_BOARD_OFFSET = 61; // 3 filas * 20 tiles
+    localparam integer VGA_BOARD_OFFSET = 121; // 6 filas * 20 + 1 columna
 
     task automatic expect_vga(
         input integer index,
@@ -553,12 +608,12 @@ module game_firmware_tb;
         while (!((dut.mmio_addr == 32'h0001_0120) &&
                  (dut.mmio_sel  == 1'b1) &&
                  (dut.mmio_we   == 1'b0)) &&
-               (cycles < 15000)) begin
+               (cycles < 150000)) begin
             @(negedge clk_i);
             cycles = cycles + 1;
         end
 
-        if (cycles >= 15000)
+        if (cycles >= 150000)
             $fatal(1, "Timeout esperando main_loop: PC=%h",
                    dut.pc_internal);
 
@@ -2209,10 +2264,86 @@ module game_firmware_tb;
         expect_ram(9, 32'd0);    // WINS_J2
 
         // BTN_RST = bit 6.
-        press_button(7'b1000000);
+        restart_expect_uart();
 
         // Dar tiempo a init_game para limpiar RAM/VGA.
-        repeat (1000) @(negedge clk_i);
+        repeat (12000) @(negedge clk_i);
+
+        // Verificar que desaparecieron los impactos anteriores.
+        expect_vga(VGA_BOARD_OFFSET + 154, 32'd0);
+
+        // Verificar una posicion del tablero J1.
+        expect_vga(VGA_BOARD_OFFSET + 0, 32'd0);
+
+        // Guardar el numero de errores antes de comprobar VGA.
+        begin : verificar_reset_vga
+            integer errores_antes_vga;
+            errores_antes_vga = errors;
+
+        // Verificar las 300 posiciones VGA tras BTN_RST.
+        // Primero se espera memoria limpia; luego se comprueban
+        // las posiciones que init_game vuelve a dibujar.
+        for (int tile = 0; tile < 300; tile++) begin
+            case (tile)
+                // Titulo BATALLA NAVAL.
+                4:  expect_vga(tile, 32'hA10);
+                5:  expect_vga(tile, 32'hA08);
+                6:  expect_vga(tile, 32'hAA0);
+                7:  expect_vga(tile, 32'hA08);
+                8:  expect_vga(tile, 32'hA60);
+                9:  expect_vga(tile, 32'hA60);
+                10: expect_vga(tile, 32'hA08);
+                11: expect_vga(tile, 32'h900);
+                12: expect_vga(tile, 32'hA70);
+                13: expect_vga(tile, 32'hA08);
+                14: expect_vga(tile, 32'hAB0);
+                15: expect_vga(tile, 32'hA08);
+                16: expect_vga(tile, 32'hA60);
+
+                // Marcador acumulado despues de victoria J1.
+                // J1 = 01 victoria, J2 = 00 victorias.
+                42: expect_vga(tile, 32'hA50);
+                43: expect_vga(tile, 32'h988);
+                44: expect_vga(tile, 32'h9D0);
+                45: expect_vga(tile, 32'h980);
+                46: expect_vga(tile, 32'h988);
+
+                52: expect_vga(tile, 32'hA50);
+                53: expect_vga(tile, 32'h990);
+                54: expect_vga(tile, 32'h9D0);
+                55: expect_vga(tile, 32'h980);
+                56: expect_vga(tile, 32'h980);
+
+                // Estadisticas J1: A:00 F:00.
+                80: expect_vga(tile, 32'hA08);
+                81: expect_vga(tile, 32'h9D0);
+                82: expect_vga(tile, 32'h980);
+                83: expect_vga(tile, 32'h980);
+                85: expect_vga(tile, 32'hA30);
+                86: expect_vga(tile, 32'h9D0);
+                87: expect_vga(tile, 32'h980);
+                88: expect_vga(tile, 32'h980);
+
+                // Estadisticas J2: A:00 F:00.
+                91: expect_vga(tile, 32'hA08);
+                92: expect_vga(tile, 32'h9D0);
+                93: expect_vga(tile, 32'h980);
+                94: expect_vga(tile, 32'h980);
+                96: expect_vga(tile, 32'hA30);
+                97: expect_vga(tile, 32'h9D0);
+                98: expect_vga(tile, 32'h980);
+                99: expect_vga(tile, 32'h980);
+
+                // Todas las demas posiciones deben estar limpias.
+                default: expect_vga(tile, 32'd0);
+            endcase
+        end
+
+            if (errors == errores_antes_vga)
+                $display("PASS VGA RESET: 300 tiles correctos.");
+            else
+                $display("FAIL VGA RESET: errores en memoria VGA.");
+        end
 
         // Nueva partida.
         expect_ram(0, 32'd0);    // STATE_PLACEMENT
@@ -2457,7 +2588,7 @@ module game_firmware_tb;
         // ============================================================
 
         // Reiniciar la partida terminada en PASS 25.
-        press_button(7'b1000000); // BTN_RST
+        restart_expect_uart(); // BTN_RST
 
         repeat (300) @(negedge clk_i);
 
@@ -2810,7 +2941,7 @@ module game_firmware_tb;
         // ============================================================
 
         // Reiniciar la partida terminada en PASS 27.
-        press_button(7'b1000000); // BTN_RST
+        restart_expect_uart(); // BTN_RST
         repeat (300) @(negedge clk_i);
 
         expect_ram(0, 32'd0);     // STATE_PLACEMENT
@@ -2922,7 +3053,7 @@ module game_firmware_tb;
         // ============================================================
 
         // Reiniciar conservando marcador previo 2-1.
-        press_button(7'b1000000);
+        restart_expect_uart();
 
         expect_ram(0, 32'd0);  // PLACEMENT
         expect_ram(6, 32'd0);  // PLACED_J1
@@ -3073,6 +3204,274 @@ module game_firmware_tb;
         expect_ram(252, 32'd2); // (7,4)
 
         $display("PASS 30: partida completa end-to-end J1 vs J2 -> FIN,1 + WINS_J1=3 + DISPLAY=0301");
+
+        // ============================================================
+        // 31. RESET GENERAL DE FPGA
+        // ============================================================
+
+        $display("INICIO PASS31: reset general de FPGA");
+
+        // Confirmar estado anterior al reset.
+        expect_ram(0, 32'd2); // FINISHED
+        expect_ram(8, 32'd3); // WINS_J1
+        expect_ram(9, 32'd1); // WINS_J2
+
+        // Activar reset general.
+        @(negedge clk_i);
+        rst_ni = 1'b0;
+
+        repeat (10) @(negedge clk_i);
+
+        // El contador de programa debe volver a cero.
+        if (dut.pc_internal !== 32'h0000_0000) begin
+            $display(
+                "ERROR PASS31 PC RESET: esperado=00000000 obtenido=%h",
+                dut.pc_internal
+            );
+            errors = errors + 1;
+        end
+
+        // Liberar reset general y capturar RST_ALL\\n.
+        fork
+            begin
+                rst_ni = 1'b1;
+            end
+
+            begin
+                expect_uart_text("RST_ALL\n");
+            end
+        join
+
+        // Esperar a que el firmware complete init_game
+        // y llegue nuevamente a main_loop.
+        cycles = 0;
+
+        while (!((dut.mmio_addr == 32'h0001_0120) &&
+                 (dut.mmio_sel  == 1'b1) &&
+                 (dut.mmio_we   == 1'b0)) &&
+               (cycles < 150000)) begin
+            @(negedge clk_i);
+            cycles = cycles + 1;
+        end
+
+        if (cycles >= 150000)
+            $fatal(1,
+                "Timeout PASS31 esperando main_loop: PC=%h",
+                dut.pc_internal);
+
+        // Verificar estado inicial.
+        expect_ram(0, 32'd0); // PLACEMENT
+        expect_ram(1, 32'd1); // TURN J1
+        expect_ram(2, 32'd0); // CURSOR_ROW
+        expect_ram(3, 32'd0); // CURSOR_COL
+        expect_ram(6, 32'd0); // PLACED_J1
+        expect_ram(7, 32'd0); // PLACED_J2
+        expect_ram(8, 32'd0); // WINS_J1
+        expect_ram(9, 32'd0); // WINS_J2
+
+        // Comprobar los cuatro arreglos de juego.
+        for (i = 0; i < 64; i = i + 1) begin
+            expect_ram(64+i,  32'd0);
+            expect_ram(128+i, 32'd0);
+            expect_ram(192+i, 32'd0);
+            expect_ram(256+i, 32'd0);
+        end
+
+        // ============================================================
+        // Verificar los 300 tiles VGA tras el reset general.
+        // ============================================================
+        begin : verificar_reset_general_vga
+            integer errores_antes_vga;
+            errores_antes_vga = errors;
+
+        for (int tile = 0; tile < 300; tile++) begin
+            case (tile)
+                // Titulo BATALLA NAVAL.
+                4:  expect_vga(tile, 32'hA10);
+                5:  expect_vga(tile, 32'hA08);
+                6:  expect_vga(tile, 32'hAA0);
+                7:  expect_vga(tile, 32'hA08);
+                8:  expect_vga(tile, 32'hA60);
+                9:  expect_vga(tile, 32'hA60);
+                10: expect_vga(tile, 32'hA08);
+                11: expect_vga(tile, 32'h900);
+                12: expect_vga(tile, 32'hA70);
+                13: expect_vga(tile, 32'hA08);
+                14: expect_vga(tile, 32'hAB0);
+                15: expect_vga(tile, 32'hA08);
+                16: expect_vga(tile, 32'hA60);
+
+                // Marcador despues del reset general.
+                // J1 = 00 victorias, J2 = 00 victorias.
+                42: expect_vga(tile, 32'hA50);
+                43: expect_vga(tile, 32'h988);
+                44: expect_vga(tile, 32'h9D0);
+                45: expect_vga(tile, 32'h980);
+                46: expect_vga(tile, 32'h980);
+
+                52: expect_vga(tile, 32'hA50);
+                53: expect_vga(tile, 32'h990);
+                54: expect_vga(tile, 32'h9D0);
+                55: expect_vga(tile, 32'h980);
+                56: expect_vga(tile, 32'h980);
+
+                // Estadisticas J1: A:00 F:00.
+                80: expect_vga(tile, 32'hA08);
+                81: expect_vga(tile, 32'h9D0);
+                82: expect_vga(tile, 32'h980);
+                83: expect_vga(tile, 32'h980);
+                85: expect_vga(tile, 32'hA30);
+                86: expect_vga(tile, 32'h9D0);
+                87: expect_vga(tile, 32'h980);
+                88: expect_vga(tile, 32'h980);
+
+                // Estadisticas J2: A:00 F:00.
+                91: expect_vga(tile, 32'hA08);
+                92: expect_vga(tile, 32'h9D0);
+                93: expect_vga(tile, 32'h980);
+                94: expect_vga(tile, 32'h980);
+                96: expect_vga(tile, 32'hA30);
+                97: expect_vga(tile, 32'h9D0);
+                98: expect_vga(tile, 32'h980);
+                99: expect_vga(tile, 32'h980);
+
+                // Todas las demas posiciones deben estar limpias.
+                default: expect_vga(tile, 32'd0);
+            endcase
+        end
+
+            if (errors == errores_antes_vga)
+                $display(
+                    "PASS VGA RESET GENERAL: 300 tiles correctos."
+                );
+            else
+                $display(
+                    "FAIL VGA RESET GENERAL: errores en memoria VGA."
+                );
+        end
+
+        // Comprobar marcador fisico.
+        if (dut.u_locales.u_seg7_ctrl.rdata_o !== 32'h0000_0000) begin
+            $display(
+                "ERROR PASS31 DISPLAY: esperado=00000000 obtenido=%h",
+                dut.u_locales.u_seg7_ctrl.rdata_o
+            );
+            errors = errors + 1;
+        end
+
+        $display("PASS 31: reset general ejecutado y estado inicial comprobado");
+
+
+        // ============================================================
+        // 32. CONSULTA DE ESTADISTICAS UART
+        // ============================================================
+
+        $display("INICIO PASS32: consulta UART Q/ST");
+
+        fork
+            begin
+                uart_send_byte(8'h51); // Q
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                expect_uart_text("ST,00,00,00,00,00,00\n");
+            end
+        join
+
+        // Consultar estadisticas no debe modificar el juego.
+        expect_ram(0, 32'd0); // PLACEMENT
+        expect_ram(1, 32'd1); // TURN J1
+        expect_ram(8, 32'd0); // WINS_J1
+        expect_ram(9, 32'd0); // WINS_J2
+
+        $display("PASS 32: Q produce ST y conserva el estado");
+
+
+
+        // ============================================================
+        // 33. ESTADISTICAS REALES POR UART
+        // ============================================================
+
+        $display("INICIO PASS33: estadisticas reales UART");
+
+        // Esperar a que el procesador termine la consulta anterior
+        // y vuelva a la lectura de botones.
+        cycles = 0;
+
+        while (!((dut.mmio_addr == 32'h0001_0120) &&
+                 (dut.mmio_sel  == 1'b1) &&
+                 (dut.mmio_we   == 1'b0)) &&
+               (cycles < 150000)) begin
+            @(negedge clk_i);
+            cycles = cycles + 1;
+        end
+
+        if (cycles >= 150000)
+            $fatal(1, "Timeout antes de PASS33");
+
+        // Preparar estadisticas conocidas.
+        // RAM[8] = WINS_J1; RAM[9] = WINS_J2.
+        dut.u_processor.ram.words[8] = 32'd3;
+        dut.u_processor.ram.words[9] = 32'd2;
+
+        // SHOTS_J1: RAM[192..255].
+        // 5 aciertos y 4 fallos.
+        for (i = 0; i < 64; i = i + 1)
+            dut.u_processor.ram.words[192+i] = 32'd0;
+
+        for (i = 0; i < 5; i = i + 1)
+            dut.u_processor.ram.words[192+i] = 32'd2;
+
+        for (i = 5; i < 9; i = i + 1)
+            dut.u_processor.ram.words[192+i] = 32'd3;
+
+        // SHOTS_J2: RAM[256..319].
+        // 7 aciertos y 6 fallos.
+        for (i = 0; i < 64; i = i + 1)
+            dut.u_processor.ram.words[256+i] = 32'd0;
+
+        for (i = 0; i < 7; i = i + 1)
+            dut.u_processor.ram.words[256+i] = 32'd2;
+
+        for (i = 7; i < 13; i = i + 1)
+            dut.u_processor.ram.words[256+i] = 32'd3;
+
+        // Verificar que los datos de prueba quedaron cargados.
+        expect_ram(8,   32'd3);
+        expect_ram(9,   32'd2);
+        expect_ram(192, 32'd2);
+        expect_ram(196, 32'd2);
+        expect_ram(197, 32'd3);
+        expect_ram(200, 32'd3);
+        expect_ram(256, 32'd2);
+        expect_ram(262, 32'd2);
+        expect_ram(263, 32'd3);
+        expect_ram(268, 32'd3);
+
+        // Consultar las estadisticas.
+        fork
+            begin
+                uart_send_byte(8'h51); // Q
+                uart_send_byte(8'h0A); // LF
+            end
+
+            begin
+                expect_uart_text("ST,03,02,05,04,07,06\n");
+            end
+        join
+
+        // La consulta no debe alterar los contadores.
+        expect_ram(8,   32'd3);
+        expect_ram(9,   32'd2);
+        expect_ram(192, 32'd2);
+        expect_ram(197, 32'd3);
+        expect_ram(256, 32'd2);
+        expect_ram(263, 32'd3);
+
+        $display(
+            "PASS 33: ST,03,02,05,04,07,06 coincide con RAM"
+        );
 
         if (errors != 0)
             $fatal(1,

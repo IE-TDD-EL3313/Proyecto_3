@@ -40,6 +40,16 @@ class Player2State:
     game_finished: bool = False
     winner: Optional[int] = None
 
+    # Victorias acumuladas entre partidas.
+    wins_j1: int = 0
+    wins_j2: int = 0
+
+    # Estadisticas de la partida actual.
+    hits_j1: int = 0
+    hits_j2: int = 0
+    misses_j1: int = 0
+    misses_j2: int = 0
+
     own_board: Dict[Coord, str] = field(default_factory=dict)
     enemy_board: Dict[Coord, str] = field(default_factory=dict)
 
@@ -54,6 +64,33 @@ class Player2State:
     pending_shot: Optional[Coord] = None
 
     status: str = "Esperando colocación de barcos."
+
+    def reset_all(self) -> None:
+        """Reinicia completamente el juego y el marcador."""
+        self.reset()
+        self.wins_j1 = 0
+        self.wins_j2 = 0
+
+    def reset(self) -> None:
+        """Restablece el estado local para una nueva partida."""
+        self.turn = None
+        self.battle_started = False
+        self.game_finished = False
+        self.winner = None
+
+        # Reiniciar estadisticas de la partida, conservar victorias.
+        self.hits_j1 = 0
+        self.hits_j2 = 0
+        self.misses_j1 = 0
+        self.misses_j2 = 0
+
+        self.own_board.clear()
+        self.enemy_board.clear()
+        self.accepted_ships.clear()
+        self.pending_placements.clear()
+        self.pending_shot = None
+
+        self.status = "Nueva partida: esperando colocación de barcos."
 
     def request_placement(
         self,
@@ -87,6 +124,17 @@ class Player2State:
     def handle_message(self, msg: Message) -> None:
         """Actualiza la presentación según un mensaje confirmado por FPGA."""
 
+        if msg.type == "ST":
+            self.wins_j1 = msg.wins_j1
+            self.wins_j2 = msg.wins_j2
+
+            self.hits_j1 = msg.hits_j1
+            self.misses_j1 = msg.misses_j1
+
+            self.hits_j2 = msg.hits_j2
+            self.misses_j2 = msg.misses_j2
+            return
+
         if msg.type == "PA":
             self._handle_placement_accepted(msg)
             return
@@ -111,7 +159,16 @@ class Player2State:
             return
 
         if msg.type == "SR":
-            self.enemy_board[(msg.row, msg.column)] = msg.result
+            coord = (msg.row, msg.column)
+
+            # Evitar contabilizar dos veces la misma casilla.
+            if coord not in self.enemy_board:
+                if msg.result in {"I", "H"}:
+                    self.hits_j2 += 1
+                elif msg.result == "F":
+                    self.misses_j2 += 1
+
+            self.enemy_board[coord] = msg.result
             self.pending_shot = None
             self.status = (
                 f"Disparo ({msg.row}, {msg.column}): "
@@ -120,7 +177,18 @@ class Player2State:
             return
 
         if msg.type == "DR":
-            self.own_board[(msg.row, msg.column)] = msg.result
+            coord = (msg.row, msg.column)
+
+            # Evitar contabilizar dos veces la misma casilla.
+            if coord not in self.own_board or (
+                self.own_board[coord] == "B"
+            ):
+                if msg.result in {"I", "H"}:
+                    self.hits_j1 += 1
+                elif msg.result == "F":
+                    self.misses_j1 += 1
+
+            self.own_board[coord] = msg.result
             self.status = (
                 f"Disparo recibido ({msg.row}, {msg.column}): "
                 f"{RESULT_TEXT[msg.result]}."
@@ -128,6 +196,13 @@ class Player2State:
             return
 
         if msg.type == "FIN":
+            # Contabilizar una victoria una sola vez.
+            if not self.game_finished:
+                if msg.winner == 1:
+                    self.wins_j1 += 1
+                elif msg.winner == 2:
+                    self.wins_j2 += 1
+
             self.game_finished = True
             self.winner = msg.winner
 
