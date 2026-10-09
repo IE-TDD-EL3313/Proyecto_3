@@ -553,8 +553,7 @@ El procesador está implementado en SystemVerilog y utiliza un datapath uniciclo
 
 En la integración actual, el núcleo recibe el reloj de sistema de 100 MHz y una habilitación cada cuatro ciclos. Durante la ejecución continua, esto permite completar nominalmente una instrucción cada 40 ns. No se incorpora pipeline ni se genera un reloj adicional de 25 MHz para la CPU.
 
-<!-- Insertar aquí la figura del diagrama de tercer nivel del procesador actualizado.
-Incluir ce_i como habilitación del PC, del banco de registros y de las escrituras. -->
+![Figura 7.1 Diagrama del Procesador RISC-V de tercer nivel](figuras/tercer_nivel_cpu.jpeg)
 
 ### 7.1 Núcleo
 
@@ -592,10 +591,88 @@ El datapath conecta los siguientes caminos principales:
 
 Las señales de selección y habilitación provienen de la unidad de control. La señal `ce_i` habilita la actualización del PC, la escritura del banco de registros y las escrituras externas, sin modificar el reloj que reciben los componentes.
 
-<!-- Insertar aquí la figura del datapath.
-Mostrar los buses de 32 bits y las señales RegWrite, ALUSrcA, ALUSrcB,
-ALUControl[3:0], ImmSrc[2:0], ResultSrc[1:0], BranchCtrl[1:0],
-Branch, Jump, JALR, MemWrite y ce_i. -->
+```mermaid
+flowchart TB
+    ROM["ROM de instrucciones"]
+    MEM["RAM y periféricos MMIO"]
+    CE["ce_i: habilitación de ejecución"]
+
+    subgraph CORE["Núcleo riscv_core"]
+        PC["Registro PC"]
+        PLUS["Sumador PC + 4"]
+        DEC["Decodificador de instrucción"]
+        CTRL["Unidad de control"]
+        IMM["Generador de inmediatos"]
+        RF["Banco de registros<br/>32 registros de 32 bits"]
+        MA["MUX A<br/>RD1 o PC"]
+        MB["MUX B<br/>RD2 o inmediato"]
+        ALU["ALU de 32 bits"]
+        CMP["Comparador de bifurcaciones"]
+        BJ["Lógica de saltos<br/>PC + Imm o RD1 + Imm<br/>JALR limpia el bit 0"]
+        NPC["MUX siguiente PC"]
+        WB["MUX de escritura<br/>ALU, DataIn o PC+4"]
+        WE["Control de escritura<br/>MemWrite AND ce_i AND NOT rst_i"]
+
+        PC -->|"PC: 32 bits"| PLUS
+        PC -->|"PC: 32 bits"| MA
+        PC -->|"PC: 32 bits"| BJ
+
+        DEC -->|"rs1, rs2, rd: 5 bits cada uno"| RF
+        DEC -->|"opcode: 7 bits<br/>funct3: 3 bits<br/>funct7: 7 bits"| CTRL
+
+        CTRL -.->|"ImmSrc: 3 bits"| IMM
+        CTRL -.->|"RegWrite"| RF
+        CTRL -.->|"ALUSrcA"| MA
+        CTRL -.->|"ALUSrcB"| MB
+        CTRL -.->|"ALUControl: 4 bits"| ALU
+
+        RF -->|"RD1: 32 bits"| MA
+        RF -->|"RD2: 32 bits"| MB
+        IMM -->|"Imm: 32 bits"| MB
+
+        MA -->|"Operando A: 32 bits"| ALU
+        MB -->|"Operando B: 32 bits"| ALU
+
+        RF -->|"RD1 y RD2: 32 bits cada uno"| CMP
+        CTRL -.->|"BranchCtrl: 2 bits"| CMP
+        CMP -.->|"BranchTaken"| BJ
+
+        RF -->|"RD1: 32 bits"| BJ
+        IMM -->|"Imm: 32 bits"| BJ
+        CTRL -.->|"Branch, Jump, JALR"| BJ
+
+        BJ -->|"TargetPC: 32 bits"| NPC
+        BJ -.->|"PCSrc"| NPC
+        PLUS -->|"PCPlus4: 32 bits"| NPC
+        NPC -->|"NextPC: 32 bits"| PC
+
+        ALU -->|"ALUResult: 32 bits"| WB
+        PLUS -->|"PCPlus4: 32 bits"| WB
+        CTRL -.->|"ResultSrc: 2 bits"| WB
+        WB -->|"WriteData: 32 bits"| RF
+
+        CTRL -.->|"MemWrite"| WE
+    end
+
+    PC -->|"ProgAddress_o: 32 bits"| ROM
+    ROM -->|"ProgIn_i: 32 bits"| DEC
+    ROM -->|"ProgIn_i: 32 bits"| IMM
+
+    ALU -->|"DataAddress_o: 32 bits"| MEM
+    RF -->|"DataOut_o = RD2: 32 bits"| MEM
+    MEM -->|"DataIn_i: 32 bits"| WB
+    WE -.->|"we_o"| MEM
+
+    CE -.->|"Habilita actualización"| PC
+    CE -.->|"Habilita escritura"| RF
+    CE -.->|"ce_i"| WE
+```
+
+*Figura 7.2 Datapath del procesador RISC-V con habilitación de ejecución.*
+
+Las líneas continuas representan datos y direcciones; las discontinuas representan señales de control. Las señales de control sin ancho indicado tienen un bit cada una.
+
+El PC y el banco de registros reciben `clk_i` y `rst_i`, omitidos del diagrama para facilitar su lectura. El reset tiene prioridad sobre `ce_i`. La ROM y la RAM/interconexión MMIO se encuentran fuera de `riscv_core`.
 
 #### Funcionamiento
 
