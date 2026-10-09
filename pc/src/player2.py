@@ -76,6 +76,7 @@ class Player2App:
         self._build_connection(main)
         self._build_boards(main)
         self._build_controls(main)
+        self._build_statistics(main)
         self._build_status(main)
 
     def _build_connection(self, parent) -> None:
@@ -277,6 +278,73 @@ class Player2App:
             pady=(8, 4),
         )
 
+    def _build_statistics(self, parent) -> None:
+        """Construye el marcador y las estadisticas de ambos jugadores."""
+
+        frame = ttk.LabelFrame(
+            parent,
+            text="Estadísticas del juego",
+            padding=10,
+        )
+
+        frame.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 10),
+        )
+
+        self.statistics_vars = {
+            "wins_j1": tk.StringVar(value="00"),
+            "wins_j2": tk.StringVar(value="00"),
+            "hits_j1": tk.StringVar(value="00"),
+            "hits_j2": tk.StringVar(value="00"),
+            "misses_j1": tk.StringVar(value="00"),
+            "misses_j2": tk.StringVar(value="00"),
+        }
+
+        ttk.Label(
+            frame,
+            text="Jugador 1",
+            font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=0, column=1, padx=25, pady=4)
+
+        ttk.Label(
+            frame,
+            text="Jugador 2",
+            font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=0, column=2, padx=25, pady=4)
+
+        rows = (
+            ("Victorias", "wins"),
+            ("Aciertos", "hits"),
+            ("Fallos", "misses"),
+        )
+
+        for row, (label, field) in enumerate(rows, start=1):
+            ttk.Label(
+                frame,
+                text=label,
+                font=("TkDefaultFont", 10),
+            ).grid(row=row, column=0, sticky="w", padx=15, pady=3)
+
+            for player in (1, 2):
+                ttk.Label(
+                    frame,
+                    textvariable=self.statistics_vars[
+                        f"{field}_j{player}"
+                    ],
+                    font=("TkDefaultFont", 11, "bold"),
+                    width=6,
+                    anchor="center",
+                ).grid(
+                    row=row,
+                    column=player,
+                    padx=25,
+                    pady=3,
+                )
+
     def _build_status(self, parent) -> None:
         frame = ttk.LabelFrame(
             parent,
@@ -284,7 +352,7 @@ class Player2App:
             padding=8,
         )
         frame.grid(
-            row=3,
+            row=4,
             column=0,
             columnspan=2,
             sticky="ew",
@@ -318,6 +386,15 @@ class Player2App:
 
         self.connection_var.set("Conectado")
         self.connect_button.configure(text="Desconectar")
+
+        # Solicitar estadísticas oficiales al conectar o reconectar.
+        try:
+            self.link.send("Q\n")
+        except SerialLinkError as exc:
+            self.status_var.set(
+                f"No se pudieron consultar las estadísticas: {exc}"
+            )
+
         self._refresh()
         self._poll_serial()
 
@@ -434,6 +511,26 @@ class Player2App:
 
         self._refresh()
 
+    def _reset_game(self, full_reset: bool = False) -> None:
+        """Reinicia la interfaz según el tipo de reset de la FPGA."""
+        if full_reset:
+            self.state.reset_all()
+        else:
+            self.state.reset()
+
+        self.own_cell_selected = False
+        self.enemy_cell_selected = False
+
+        self.ship_var.set(0)
+        self.place_row_var.set(0)
+        self.place_col_var.set(0)
+        self.orientation_var.set("H")
+
+        self.shot_row_var.set(0)
+        self.shot_col_var.set(0)
+
+        self._refresh()
+
     def _poll_serial(self) -> None:
         if not self.link.is_open:
             return
@@ -444,6 +541,12 @@ class Player2App:
 
                 if msg is None:
                     break
+
+                if msg.type in {"RST", "RST_ALL"}:
+                    self._reset_game(
+                        full_reset=(msg.type == "RST_ALL")
+                    )
+                    continue
 
                 self.state.handle_message(msg)
 
@@ -583,6 +686,13 @@ class Player2App:
 
     def _refresh(self) -> None:
         self.status_var.set(self.state.status)
+
+        # Sincronizar el panel con el estado local.
+        for field in ("wins", "hits", "misses"):
+            for player in (1, 2):
+                key = f"{field}_j{player}"
+                value = getattr(self.state, key)
+                self.statistics_vars[key].set(f"{value:02d}")
         self._refresh_buttons()
 
         ship = self._next_ship()

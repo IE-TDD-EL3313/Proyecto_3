@@ -36,6 +36,12 @@ class Message:
     reason: Optional[str] = None
     player: Optional[int] = None
     winner: Optional[int] = None
+    wins_j1: Optional[int] = None
+    wins_j2: Optional[int] = None
+    hits_j1: Optional[int] = None
+    misses_j1: Optional[int] = None
+    hits_j2: Optional[int] = None
+    misses_j2: Optional[int] = None
 
 
 def _parse_int(value: str, field: str) -> int:
@@ -105,6 +111,43 @@ def parse_message(raw: str) -> Message:
 
     fields = line.split(",")
     msg_type = fields[0]
+
+    if msg_type in {"RST", "RST_ALL"}:
+        if len(fields) != 1:
+            raise ProtocolError(f"Formato esperado: {msg_type}")
+
+        return Message(type=msg_type)
+
+    if msg_type == "ST":
+        if len(fields) != 7:
+            raise ProtocolError(
+                "Formato esperado: ST,V1,V2,A1,F1,A2,F2"
+            )
+
+        values = []
+
+        for value in fields[1:]:
+            if len(value) != 2 or not value.isascii() or not value.isdigit():
+                raise ProtocolError(
+                    "Cada estadística ST debe tener dos dígitos ASCII"
+                )
+
+            number = int(value)
+
+            if not 0 <= number <= 99:
+                raise ProtocolError("Estadística ST fuera de rango")
+
+            values.append(number)
+
+        return Message(
+            type="ST",
+            wins_j1=values[0],
+            wins_j2=values[1],
+            hits_j1=values[2],
+            misses_j1=values[3],
+            hits_j2=values[4],
+            misses_j2=values[5],
+        )
 
     if msg_type == "PA":
         if len(fields) != 2:

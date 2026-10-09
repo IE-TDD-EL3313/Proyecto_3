@@ -50,6 +50,7 @@
 .equ UART_CMD,         0x00002520
 .equ UART_CMD_PLACE,   1
 .equ UART_CMD_SHOT,    2
+.equ UART_CMD_STATS,   3
 
 # Estados
 .equ STATE_PLACEMENT, 0
@@ -90,6 +91,31 @@ _start:
     sw      zero, 36(s0)
 
     jal     ra, init_game
+
+    # Notificar a Python el arranque o reset general: RST_ALL\n
+    addi    a0, zero, 82      # R
+    jal     t6, uart_putc
+
+    addi    a0, zero, 83      # S
+    jal     t6, uart_putc
+
+    addi    a0, zero, 84      # T
+    jal     t6, uart_putc
+
+    addi    a0, zero, 95      # _
+    jal     t6, uart_putc
+
+    addi    a0, zero, 65      # A
+    jal     t6, uart_putc
+
+    addi    a0, zero, 76      # L
+    jal     t6, uart_putc
+
+    addi    a0, zero, 76      # L
+    jal     t6, uart_putc
+
+    addi    a0, zero, 10      # LF
+    jal     t6, uart_putc
 
 main_loop:
     # Revisar si existe un byte UART pendiente.
@@ -162,6 +188,20 @@ controls_battle:
 
 restart_game:
     jal     ra, init_game
+
+    # Notificar a Python el reinicio de partida: RST\n
+    addi    a0, zero, 82      # R
+    jal     t6, uart_putc
+
+    addi    a0, zero, 83      # S
+    jal     t6, uart_putc
+
+    addi    a0, zero, 84      # T
+    jal     t6, uart_putc
+
+    addi    a0, zero, 10      # LF
+    jal     t6, uart_putc
+
     jal     zero, main_loop
 
 cursor_up:
@@ -277,6 +317,9 @@ poll_uart:
     addi    t3, zero, 14
     beq     t1, t3, uart_state_14
 
+    addi    t3, zero, 15
+    beq     t1, t3, uart_state_15
+
     jal     zero, uart_parser_reset
 
 uart_state_0:
@@ -287,6 +330,10 @@ uart_state_0:
     # 'S' = trama de disparo.
     addi    t3, zero, 83
     beq     t0, t3, uart_start_shot
+
+    # 'Q' = consulta de estadisticas.
+    addi    t3, zero, 81
+    beq     t0, t3, uart_start_stats
 
     jal     zero, uart_parser_reset
 
@@ -311,6 +358,18 @@ uart_start_shot:
     sw      t1, 4(t2)
 
     jal     zero, poll_uart_done
+
+uart_start_stats:
+    # Identificar comando de consulta.
+    addi    t3, zero, UART_CMD_STATS
+    sw      t3, 32(t2)
+
+    # Estado 15: esperar LF.
+    addi    t1, zero, 15
+    sw      t1, 4(t2)
+
+    jal     zero, poll_uart_done
+
 
 uart_state_1:
     # Esperar ',' = 0x2C.
@@ -486,6 +545,20 @@ uart_state_14:
     jal     zero, poll_uart_done
 
 
+uart_state_15:
+    # Consulta Q valida solamente si termina con LF.
+    addi    t3, zero, 10
+    bne     t0, t3, uart_parser_reset
+
+    # Trama Q completa.
+    sw      zero, 4(t2)
+
+    addi    t3, zero, 1
+    sw      t3, 24(t2)
+
+    jal     zero, poll_uart_done
+
+
 uart_parser_reset:
     # Descartar trama malformada.
     sw      zero, 4(t2)
@@ -555,6 +628,9 @@ process_uart_frame:
 
     addi    t2, zero, UART_CMD_SHOT
     beq     t1, t2, process_uart_shot
+
+    addi    t2, zero, UART_CMD_STATS
+    beq     t1, t2, process_uart_stats
 
     jal     zero, process_uart_done
 
@@ -1193,6 +1269,167 @@ check_ship_sunk_j1_no:
 
 check_ship_sunk_j1_yes:
     addi    a0, zero, 1
+    jalr    zero, 0(ra)
+
+
+# ============================================================================
+# Consulta de estadisticas UART
+# Respuesta: ST,V1,V2,A1,F1,A2,F2\\n
+# Cada campo contiene dos digitos decimales.
+# ============================================================================
+
+process_uart_stats:
+    # Conservar retorno original de process_uart_frame.
+    add     s3, ra, zero
+
+    # Contadores en registros a1..a4.
+    # a1 = aciertos J1
+    # a2 = fallos J1
+    # a3 = aciertos J2
+    # a4 = fallos J2
+
+    addi    a1, zero, 0
+    addi    a2, zero, 0
+    addi    a3, zero, 0
+    addi    a4, zero, 0
+
+    # Recorrer SHOTS_J1 y SHOTS_J2.
+    addi    t1, s0, 768       # SHOTS_J1 = 0x2300
+    addi    t2, s0, 1024      # SHOTS_J2 = 0x2400
+    addi    t3, zero, 64
+
+stats_count_loop:
+    lw      t4, 0(t1)
+    lw      t5, 0(t2)
+
+    addi    a5, zero, CELL_HIT
+    beq     t4, a5, stats_hit_j1
+    addi    a5, zero, CELL_MISS
+    beq     t4, a5, stats_miss_j1
+    jal     zero, stats_check_j2
+
+stats_hit_j1:
+    addi    a1, a1, 1
+    jal     zero, stats_check_j2
+
+stats_miss_j1:
+    addi    a2, a2, 1
+
+stats_check_j2:
+    addi    a5, zero, CELL_HIT
+    beq     t5, a5, stats_hit_j2
+    addi    a5, zero, CELL_MISS
+    beq     t5, a5, stats_miss_j2
+    jal     zero, stats_next
+
+stats_hit_j2:
+    addi    a3, a3, 1
+    jal     zero, stats_next
+
+stats_miss_j2:
+    addi    a4, a4, 1
+
+stats_next:
+    addi    t1, t1, 4
+    addi    t2, t2, 4
+    addi    t3, t3, -1
+    bne     t3, zero, stats_count_loop
+
+    # Guardar contadores temporalmente en registros que
+    # no modifica uart_putc.
+    add     a6, a1, zero
+    add     a7, a2, zero
+
+    # Encabezado ST,
+    addi    a0, zero, 83      # S
+    jal     t6, uart_putc
+    addi    a0, zero, 84      # T
+    jal     t6, uart_putc
+    addi    a0, zero, 44      # ,
+    jal     t6, uart_putc
+
+    # Victorias J1.
+    lw      a0, 32(s0)
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 44
+    jal     t6, uart_putc
+
+    # Victorias J2.
+    lw      a0, 36(s0)
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 44
+    jal     t6, uart_putc
+
+    # Aciertos J1.
+    add     a0, a6, zero
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 44
+    jal     t6, uart_putc
+
+    # Fallos J1.
+    add     a0, a7, zero
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 44
+    jal     t6, uart_putc
+
+    # Aciertos J2.
+    add     a0, a3, zero
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 44
+    jal     t6, uart_putc
+
+    # Fallos J2.
+    add     a0, a4, zero
+    jal     ra, uart_send_2digits
+
+    addi    a0, zero, 10      # LF
+    jal     t6, uart_putc
+
+    # Restaurar direccion de retorno.
+    add     ra, s3, zero
+    jal     zero, process_uart_done
+
+
+# ============================================================================
+# Transmitir numero decimal de dos digitos.
+#
+# Entrada: a0 = numero (0..99)
+# Salida UART: decenas y unidades ASCII.
+#
+# Utiliza t1, t2, t3, t4.
+# Conserva ra y los contadores a1..a7.
+# ============================================================================
+
+uart_send_2digits:
+    addi    t1, zero, 0
+
+    # Limitar a dos digitos, igual que el marcador VGA.
+stats_mod100:
+    addi    t2, zero, 100
+    blt     a0, t2, stats_tens
+    addi    a0, a0, -100
+    jal     zero, stats_mod100
+
+stats_tens:
+    addi    t2, zero, 10
+    blt     a0, t2, stats_send_tens
+    addi    a0, a0, -10
+    addi    t1, t1, 1
+    jal     zero, stats_tens
+
+stats_send_tens:
+    add     t3, a0, zero     # Unidades
+    addi    a0, t1, 48      # Decenas ASCII
+    jal     t6, uart_putc
+
+    addi    a0, t3, 48      # Unidades ASCII
+    jal     t6, uart_putc
+
     jalr    zero, 0(ra)
 
 
